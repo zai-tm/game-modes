@@ -5,7 +5,7 @@
  #Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
 
  #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race"
- #Const	Version							"1.1.0+2023-10-09"
+ #Const	Version							"2024-09-15"
  #Const	ScriptName					"Modes/TrackMania/TM_TimeAttack_Online.Script.txt"
  
  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
