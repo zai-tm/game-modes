@@ -1,0 +1,1293 @@
+/**
+ *	Time Attack mode
+ * @context CSmMode
+ */
+ #Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
+
+ #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race"
+ #Const	Version							"1.1.0+2023-10-09"
+ #Const	ScriptName					"Modes/TrackMania/TM_TimeAttack_Online.Script.txt"
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // MARK: Libraries
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ #Include "TextLib" as TL
+ #Include "MathLib" as ML
+ #Include "Libs/Nadeo/CMGame/Utils/Task.Script.txt" as Task
+ #Include "Libs/Nadeo/Trackmania/Modes/TimeAttack/StateManager.Script.txt" as StateMgr
+ #Include "Libs/Nadeo/Trackmania/Modes/TrophyRanking.Script.txt" as TrophyRanking
+ #Include "Libs/Nadeo/Trackmania/MainMenu/Constants.Script.txt" as MenuConsts
+ #Include "Libs/Nadeo/TMGame/Utils/Tracking.Script.txt" as Tracking
+ // UI from Race
+ #Include "Libs/Nadeo/TMGame/Modes/Base/UIModules/TimeGap_Server.Script.txt" as UIModules_TimeGap
+ #Include "Libs/Nadeo/TMGame/Modes/Base/UIModules/Checkpoint_Server.Script.txt" as UIModules_Checkpoint
+ #Include "Libs/Nadeo/TMGame/Modes/Base/UIModules/PauseMenuOnline_Server.Script.txt" as UIModules_PauseMenu_Online
+ #Include "Libs/Nadeo/Trackmania/Modes/TimeAttack/UIModules/EndMatchTrophy_Server.Script.txt" as UIModules_EndMatchTrophy
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // MARK: Settings
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ #Setting S_TimeLimit 300 as _("Time limit") ///< Time limit before going to the next map
+ #Setting S_WarmUpNb 0 as _("Number of warm up")
+ #Setting S_WarmUpDuration 0 as _("Duration of one warm up")
+ #Setting S_WarmUpTimeout -1 as _("Warm up timeout")
+ #Setting S_ScriptEnvironment "development"
+ #Setting S_PickAndBan_Enable True
+#Setting S_PickAndBan_Style """{
+	"Background": "file://Media/Manialinks/Nadeo/Trackmania/Modes/TMWT/UI/TMWT_MatchIntroBackground.dds",
+	"TopLeftLogo": "file://Media/Manialinks/Nadeo/Trackmania/Modes/TMWT/BrandsLogo/TMWT_Logo.dds",
+	"TopRightLogo": "file://Media/Manialinks/Nadeo/Trackmania/Modes/TMWT/BrandsLogo/TMWT_TMGL.dds",
+	"BottomLogo": "file://Media/Manialinks/Nadeo/Trackmania/Modes/TMWT/BrandsLogo/TMWT_Kaporal.dds"
+}"""
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // MARK: Constants
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ #Const C_ModeName "Time Attack"
+ //L16N [Time Attack] Description of the mode rules
+ #Const Description _("$zIn $<$t$6F9Time Attack$> mode, the goal is to set the $<$t$6F9best time$>.\n\nYou have as many tries as you want, and you can $<$t$6F9retry$> when you want by pressing the respawn button.\n\nWhen the time is up, the $<$t$6F9winner$> is the player with the $<$t$6F9best time$>.")
+ 
+ #Const C_HudModulePath "" //< Path to the hud module
+ #Const C_ManiaAppUrl "file://Media/ManiaApps/Nadeo/Trackmania/Modes/TimeAttack.Script.txt" //< Url of the mania app
+ #Const C_FakeUsersNb 0
+ 
+ #Const C_UploadRecord False
+ #Const C_DisplayRecordGhost False
+ #Const C_DisplayRecordMedal False
+ #Const C_CelebrateRecordGhost False
+ #Const C_CelebrateRecordMedal False
+ #Const C_DisplayWorldTop False
+ 
+ #Const C_TrophyTaskTimeout 5000
+ #Const C_TrophyAnimationDuration 4000
+ #Const C_TrophyDisplayDuration 7000
+
+ #Const C_EnableBlackMarket False //< "Warning! Can cause crashes!"
+
+  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // MARK: Structures
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ #Struct K_ModelLeaderboard {
+	Text ModelName;
+	Integer[Text] Leaderboard;
+ }
+ 
+ 
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // MARK: Extends
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ ***Match_LogVersions***
+ ***
+ Log::RegisterScript(ScriptName, Version);
+ Log::RegisterScript(StateMgr::ScriptName, StateMgr::Version);
+ ***
+ 
+ ***Match_LoadLibraries***
+ ***
+ StateMgr::Load();
+ ***
+ 
+ ***Match_UnloadLibraries***
+ ***
+ StateMgr::Unload();
+ ***
+ 
+ ***Match_Settings***
+ ***
+ MB_Settings_UseDefaultTimer = False;
+ MB_Settings_UseDefaultHud = (C_HudModulePath == "");
+ MB_Settings_UseDefaultPodiumSequence = False;
+ ***
+ 
+ ***Match_Rules***
+ ***
+ ModeInfo::SetName(C_ModeName);
+ ModeInfo::SetType(ModeInfo::C_Type_FreeForAll);
+ ModeInfo::SetRules(Description);
+ ModeInfo::SetStatusMessage(_("TYPE: Free for all\nOBJECTIVE: Set the best time on the track."));
+ ***
+ 
+ ***Match_LoadHud***
+ ***
+ if (C_HudModulePath != "") Hud_Load(C_HudModulePath);
+ ***
+ 
+ ***Match_AfterLoadHud***
+ ***
+ UIManager.UIAll.ScoreTableOnlyManialink = True;
+
+ UIModules::UnloadModules([
+                      	"UIModule_Race_ScoresTable",
+                        "UIModule_Race_ScoresTable_Splitscreen"													
+                        ]);
+
+ UIModules_Checkpoint::SetRankMode(UIModules_Checkpoint::C_RankMode_BestRace);
+ ClientManiaAppUrl = C_ManiaAppUrl;
+ Race::SortScores(GetScoresSortCriteria());
+ UIModules_TimeGap::SetTimeGapMode(UIModules_TimeGap::C_TimeGapMode_BestRace);
+ UIModules_PauseMenu_Online::SetHelp(Description);
+ UIModules_Sign16x9Small::SetScoreMode(UIModules_Sign16x9Small::C_ScoreMode_BestRaceTime);
+ UIManager.UIAll.OverlayHideCountdown = True;
+//  UIManager.UIAll.OverlayHide321Go = False;
+ UIManager.UIAll.OverlayHideSpectatorInfos = True;
+ ***
+ 
+ ***Match_Yield***
+ ***
+ foreach (Event in PendingEvents) {
+	 switch (Event.Type) {
+		 // Initialize players when they join the server
+		 case CSmModeEvent::EType::OnPlayerAdded: {
+			 StateMgr::InitializePlayer(Event.Player);
+			 CarRank::InitializePlayer(Event.Player);
+			 if (Event.Player != Null) {
+				 declare Boolean Match_CanForceTrophyRankUpdate for This;
+				 TrophyRanking::InitializeUser(Event.Player.User, Match_CanForceTrophyRankUpdate);
+
+				 
+			 }
+
+		 }
+	 }
+ }
+
+ StateMgr::Yield();
+ TrophyRanking::Yield();
+ ***
+ 
+ ***Match_StartServer***
+ ***
+ // Initialize mode
+ Clans::SetClansNb(0);
+ GiveUpBehaviour_RespawnAfter = True;
+ CrudeExtrapolation_AllowDelay = True;
+ Race::SetRespawnBehaviour(Race::C_RespawnBehaviour_GiveUpBeforeFirstCheckpoint);
+ StateMgr::ForcePlayersStates([StateMgr::C_State_Waiting]);
+ WarmUp::SetAvailability(True);
+ Race::SetupRecord(
+	 MenuConsts::C_ScopeType_Season,
+	 MenuConsts::C_ScopeType_PersonalBest,
+	 MenuConsts::C_GameMode_TimeAttack,
+	 "",
+	 C_UploadRecord,
+	 C_DisplayRecordGhost,
+	 C_DisplayRecordMedal,
+	 C_CelebrateRecordGhost,
+	 C_CelebrateRecordMedal,
+	 C_DisplayWorldTop
+ );
+ CarRank::Reset();
+
+ ***
+ 
+ ***Match_InitMatch***
+ ***
+ declare Task::K_Task Match_TrophyTask;
+ declare Integer Match_TrophyTaskEndTime;
+ declare Integer Match_MatchDuration;
+ declare Boolean Match_CanForceTrophyRankUpdate for This = False;
+
+ declare Ident[Text] ModelIds;
+ // List of integers, key : login , key : car
+
+ declare Integer[Text][Text] Checkpoints; 
+ ModelIds["DefaultPlayerModel"] = ItemList_Add("DefaultPlayerModel");
+ ModelIds["CarSport"] = ItemList_Add("CarSport");
+ ModelIds["CarSnow"] = ItemList_Add("CarSnow");
+ ModelIds["CarRally"] = ItemList_Add("CarRally");
+ ModelIds["CarDesert"] = ItemList_Add("CarDesert");
+ if (C_EnableBlackMarket) {
+	ModelIds["DesertCar"] = ItemList_Add("DesertCar");
+	ModelIds["SnowCar"] = ItemList_Add("SnowCar");
+	ModelIds["RallyCar"] = ItemList_Add("RallyCar");
+	ModelIds["IslandCar"] = ItemList_Add("IslandCar");
+	ModelIds["BayCar"] = ItemList_Add("BayCar");
+	ModelIds["CoastCar"] = ItemList_Add("CoastCar");
+	ModelIds["StadiumCar"] = ItemList_Add("StadiumCar");
+	ModelIds["CanyonCar"] = ItemList_Add("CanyonCar");
+	ModelIds["ValleyCar"] = ItemList_Add("ValleyCar");
+	ModelIds["LagoonCar"] = ItemList_Add("LagoonCar");
+	ModelIds["TrafficCar"] = ItemList_Add("TrafficCar");
+ }
+
+ declare Integer[Text][Text] LoginsRanks = ["CarSport" => [], "CarSnow" => [], "CarRally" => [], "CarDesert" => [] ];
+ declare Text[] PodiumLogins = ["", "", ""];
+
+ ***
+ 
+ ***Match_AfterLoadMap***
+ ***
+ Match_CanForceTrophyRankUpdate = True;
+ ***
+ 
+ ***Match_InitMap***
+ ***
+ declare Integer Map_TimeLimit;
+ declare Integer Map_MapStartTime;
+
+ declare Text[Text][][Text] Leaderboards;
+ Leaderboards.clear();
+ foreach (Name => Model in ModelIds) {
+	if (Name == "DefaultPlayerModel") continue;
+ /* 	declare K_ModelLeaderboard TempModelLeaderboard = K_ModelLeaderboard {
+		ModelName = ModelIds.keyof(Model),
+		Leaderboard = TempLeaderboard
+	}; */
+	Leaderboards[Name] = Text[Text][];
+ }
+ ***
+ 
+ ***Match_StartMap***
+ ***
+
+ // Add bot when necessary
+ Users_SetNbFakeUsers(C_FakeUsersNb, 0);
+ 
+ // Warm up
+ UIModules_ScoresTable::SetFooterInfo(_("Warmup"));
+ GiveUpBehaviour_RespawnAfter = False;
+ MB_WarmUp(S_WarmUpNb, S_WarmUpDuration * 1000, S_WarmUpTimeout * 1000);
+ GiveUpBehaviour_RespawnAfter = True;
+ 
+ // Initialize race
+ SetScoresTableScoreMode(Race::IsIndependentLaps(), False);
+ StartTime = Now + Race::C_SpawnDuration;
+ Map_TimeLimit = S_TimeLimit+1000;
+ Map_MapStartTime = StartTime;
+ SetTimeLimit(StartTime, S_TimeLimit);
+UIManager.UIAll.DisableZoomTransitions = False;
+
+
+foreach (Player in AllPlayers) {
+	declare netwrite Text[Text][][Text] Net_Leaderboards for UIManager.GetUI(Player);
+	Net_Leaderboards = Leaderboards;
+}
+
+ // Spawn players for the race
+ foreach (Player in Players) {
+	declare Integer[][Text] CheckpointTimes for Player;
+	//  declare Integer[][Text] PrevCheckpointTimes for Player;
+	 declare Integer[Text] BestRecords for Player;
+	 declare Integer[Text] PrevRecords for Player;
+	 foreach (Name => Model in ModelIds) {
+		if (Name == "DefaultPlayerModel") continue;
+	 /* 	declare K_ModelLeaderboard TempModelLeaderboard = K_ModelLeaderboard {
+			ModelName = ModelIds.keyof(Model),
+			Leaderboard = TempLeaderboard
+		}; */
+		CheckpointTimes = [ "CarSport" => [], "CarSnow" => [], "CarRally" => [], "CarDesert" => [] ];
+		BestRecords[Name] = -1;
+		PrevRecords[Name] = -1;
+	 }
+
+	// log(SpawnDelay ^ " : " ^ Now ^ " : " ^Event.CustomEventData[0]);
+	declare Text StartingCar = GetRandomCar(C_EnableBlackMarket);//MapPlayerModelName;
+			declare Boolean VehicleChange for Player;
+			declare Text CurrentModel for Player;
+	CurrentModel = StartingCar;
+	VehicleChange = True;
+	if (StartingCar == MapPlayerModelName) Player.ForceModelId = NullId;
+	else Player.ForceModelId = ModelIds[StartingCar];
+	Map.MapName = "$<"^Map.MapInfo.Name ^"$>."^ StartingCar;
+    declare Integer SpawnDelay for Player;
+    SpawnDelay = Now+3000;
+	// Race::Start(Player, StartTime+1500);
+ }
+ 
+ StateMgr::ForcePlayersStates([StateMgr::C_State_Playing]);
+ CarRank::Update(CarRank::C_SortCriteria_BestRace);
+ Race::EnableIntroDuringMatch(True);
+ InitUI();
+ ***
+ 
+ ***Match_PlayLoop***
+ ***
+ // Manage race events
+ declare RacePendingEvents = Race::GetPendingEvents();
+ foreach (Event in RacePendingEvents) {
+	 Race::ValidEvent(Event);
+	 // Waypoint
+	 if (Event.Type == Events::C_Type_Waypoint) {
+		 if (Event.Player != Null) {
+			 declare Player <=> Event.Player;
+
+			 declare Better = False;
+			 declare OldRank = -1;
+			 declare Boolean VehicleChange for Player;
+			 declare Text CurrentModel for Player;
+
+			 declare Integer[][Text] CheckpointTimes for Player;
+			//  declare Integer[][Text] PrevCheckpointTimes for Player;
+			 declare Integer[Text] BestRecords for Player;
+			 declare Integer[Text] PrevRecords for Player;
+
+			 if (Event.IsEndRace) {
+				VehicleChange = False;
+
+				for (i, 0, Leaderboards[CurrentModel].count-1) {
+					if(Leaderboards[CurrentModel][i]["Login"] == Player.User.Login) {
+						OldRank = i;
+						break;
+					}
+				}
+// MARK: importante
+				// If player is in leaderboard, update their time
+				if (OldRank != -1) {
+					if (TL::ToInteger(Leaderboards[CurrentModel][OldRank]["Time"]) > Event.RaceTime || Leaderboards[CurrentModel][OldRank]["Time"] == "-1") {
+						Leaderboards[CurrentModel][OldRank] = ["Login" => Player.User.Login, "Time" => ""^Event.RaceTime];
+						BestRecords[CurrentModel] = Event.RaceTime;
+					}
+				} else {
+					Leaderboards[CurrentModel].add(["Login" => Player.User.Login, "Time" => ""^Event.RaceTime]);
+					BestRecords[CurrentModel] = Event.RaceTime;
+
+				}
+				PrevRecords[CurrentModel] = Event.RaceTime;
+
+			 } else if (Event.IsEndLap) {
+				 declare BetterLap = Scores::UpdatePlayerBestLapIfBetter(Event.Player);
+				 if (Race::IsIndependentLaps()) {
+					 // Computes old rank before changing Score
+					 foreach (Index => Score in Scores) {
+						 if (Score.Id == Event.Player.Score.Id) {
+							 if (Score.BestLapTimes.count != 0) {
+								 OldRank = Index + 1;
+							 } else {
+								 OldRank = -123;
+							 }
+							 break;
+						 }
+					 }
+					 // Change Score
+					 Better = BetterLap;
+					 if (Better) Scores::UpdatePlayerBestRace(Event.Player);
+					 Scores::UpdatePlayerPrevLap(Event.Player);
+				 }
+				 Race::SortScores(GetScoresSortCriteria());
+			 }
+			 if (Better) {
+				 declare NewRank = 0;
+				 foreach (Index => Score in Scores) {
+					 if (Score.Id == Event.Player.Score.Id) {
+						 NewRank = Index + 1;
+						 break;
+					 }
+				 }
+				 if (OldRank != NewRank) {
+					 if (0 < NewRank && NewRank < 4) {
+						 foreach (Player in AllPlayers) {
+							 UIModules_DisplayMessage::SendLiveMessage_RankUpdate(Player, Event.Player.User, NewRank);
+						 }
+					 } else if (0 < NewRank) {
+						 UIModules_DisplayMessage::SendLiveMessage_RankUpdate(Event.Player, Event.Player.User, NewRank);
+					 }
+				 }
+ 
+				//  CarRank::ThrottleUpdate(CarRank::C_SortCriteria_BestRace);
+			 }
+		 }
+	 }
+ }
+    //log(Leaderboards);
+
+ foreach (Player in Players) {
+	declare Integer SpawnDelay for Player;
+	declare Text CurrentModel for Player;
+
+	Player.Dossard_Trigram = "";
+	
+	//log(Player.Dossard_Trigram);
+
+/* 	if(!SetPlayer_DelayedIsFull(Player)) {
+		SetPlayer_Delayed_VehicleTransform(Player, CSmMode::EVehicleTransformType::Reset);
+	} */
+	
+	if (Now == SpawnDelay && Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned) {
+		//log(SpawnDelay ^ " : " ^ Now);
+		Race::Start(Player, Now+1000);
+	}
+
+	declare netread Integer[Text][Text] Net_SortedTimes for UIManager.GetUI(Player);
+	declare Integer Rank = 1;
+	if (Net_SortedTimes.count > 0 && CurrentModel != "") {
+		foreach (Login => Time in Net_SortedTimes[CurrentModel]) {
+			if (Login == Player.User.Login) {
+				break;
+			}
+			Rank+=1;
+		}
+
+			if (Net_SortedTimes[CurrentModel].existskey(Player.User.Login)) {
+				// log("1. "^Player.User.Login);
+				if (Rank < 10) {
+					Player.Dossard_Number = "0"^Rank;
+				} else {
+					Player.Dossard_Number = ""^Rank;
+				}
+			} else {
+				
+				// log("2. "^Player.User.Login);
+				if (Net_SortedTimes[CurrentModel].count < 10) {
+					Player.Dossard_Number = "0"^Net_SortedTimes[CurrentModel].count+1;
+				} else {
+					Player.Dossard_Number = ""^Net_SortedTimes[CurrentModel].count+1;
+				}
+			}
+
+		}	
+}
+
+foreach (Player in AllPlayers) {
+	foreach (ModelName => ModelLeaderboard in Leaderboards) {
+		declare Integer OldRank = -1;
+		declare Boolean ContainsPlayer = False;
+		for (i, 0, Leaderboards[ModelName].count-1) {
+			if(Leaderboards[ModelName][i]["Login"] == Player.User.Login) {
+				OldRank = i;
+				break;
+			}
+		}
+// MARK: importante2
+		// If player is in leaderboard, update their time
+		if (OldRank == -1) {
+			Leaderboards[ModelName].add(["Login" => Player.User.Login, "Time" => "-1"]);
+		}
+
+	}
+
+	declare netwrite Text[Text][][Text] Net_Leaderboards for UIManager.GetUI(Player);
+	Net_Leaderboards = Leaderboards;
+
+
+
+}
+
+ foreach (Event in UIManager.PendingEvents) {
+	if (Event.Type == CUIConfigEvent::EType::OnLayerCustomEvent) {
+		if (Event.CustomEventType == "ButtonClick") {
+            declare CSmPlayer Player = GetPlayer(Event.UI);
+			declare Integer SpawnDelay for Player; 
+			declare Boolean VehicleChange for Player;
+			declare Text CurrentModel for Player;
+			declare Text CarModel;
+			SpawnDelay = Now+1000;
+			VehicleChange = True;	
+			CarModel = Event.CustomEventData[0];
+			CurrentModel = CarModel;
+			// log(SpawnDelay ^ " : " ^ Now ^ " : " ^Event.CustomEventData[0]);
+			if (CarModel == MapPlayerModelName) Player.ForceModelId = NullId;
+            else Player.ForceModelId = ModelIds[CarModel];
+			Map.MapName = "$<"^Map.MapInfo.Name ^"$>."^ CarModel;
+			// UnspawnPlayer(Player);
+			Race::Wait(Player);
+
+			// SpawnPlayer(Player, 0, 1, MapLandmarks_PlayerSpawn[0].PlayerSpawn, Now+3000);
+            // Player.ForceModelId = ModelIds["CarSport"];
+
+			// SetPlayerAllWeaponAvailable(Players[0], True);
+		}
+	}
+}
+
+
+ 
+ // Manage mode events
+ foreach (Event in PendingEvents) {
+	 if (Event.HasBeenPassed || Event.HasBeenDiscarded) continue;
+	 Events::Invalid(Event);
+	 if (Event.Type == CSmModeEvent::EType::OnPlayerAdded) {
+		if (Event.Player != Null) {
+
+
+			declare Text StartingCar = GetRandomCar(C_EnableBlackMarket);//MapPlayerModelName;
+			declare Text CurrentModel for Event.Player;
+			log(CurrentModel);
+			CurrentModel = StartingCar;
+			if (StartingCar == MapPlayerModelName) Event.Player.ForceModelId = NullId;
+			else Event.Player.ForceModelId = ModelIds[StartingCar];
+			Map.MapName = "$<"^Map.MapInfo.Name ^"$>."^ StartingCar;
+			declare Integer SpawnDelay for Event.Player;
+			SpawnDelay = Now+1000;
+			Race::Wait(Event.Player);
+
+		}
+
+	}
+ }
+ 
+ // Spawn players
+ if (PlayersNbDead > 0) { //< Check for unspawned players only if at least one player is unspawned
+	 foreach (Player in Players) {
+		// log("a");
+		declare Boolean VehicleChange for Player;
+		//log(VehicleChange);
+		 if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned && Race::IsReadyToStart(Player) && !VehicleChange) {
+			 Race::Start(Player);
+		 }
+	 }
+ }
+ 
+ // Update the map duration setting
+ if (Map_TimeLimit != S_TimeLimit) {
+	 Map_TimeLimit = S_TimeLimit;
+	 SetTimeLimit(StartTime, S_TimeLimit);
+ }
+ 
+ // End the map when time limit is reached
+ if (EndTime > 0 && Now >= EndTime) {
+	 MB_StopMatch();
+ }
+ ***
+
+ // MARK: EndMap
+ 
+ ***Match_EndMap***
+ ***
+ // Ensure that we stop the match (after a vote for the next map, ...)
+ MB_StopMatch();
+ 
+ EndTime = -1;
+ Match_MatchDuration = ML::Max(0, Now - Map_MapStartTime);
+ StateMgr::ForcePlayersStates([StateMgr::C_State_Waiting]);
+ Race::EnableIntroDuringMatch(False);
+ 
+ Race::SortScores(GetScoresSortCriteria());
+ TrophyRanking::UpdateUsersRank();
+ CarRank::Update(CarRank::C_SortCriteria_BestRace);
+ declare CSmScore Winner <=> Scores::GetBestPlayer(GetLadderSortCriteria());
+ Scores::SetPlayerWinner(Winner);
+ Race::StopSkipOutroAll();
+ 
+ // Compute ranking for tracking
+ declare Integer PreviousRaceTime = 0;
+ declare Integer Rank = 0;
+ foreach (Key => Score in Scores) {
+	 declare Integer BestRaceTime = Scores::GetPlayerBestRaceTime(Score);
+	 if (
+		 Key == 0 || (
+			 BestRaceTime > 0 &&
+			 PreviousRaceTime < BestRaceTime
+		 ) || (
+			 BestRaceTime <= 0 &&
+			 PreviousRaceTime > 0
+		 )
+	 ) {
+		 PreviousRaceTime = BestRaceTime;
+		 Rank = Key + 1;
+	 }
+	 Tracking::SendPlayerMatchResult(UIManager, Score.User, Rank, Winner == Score && Scores.count > 1 && BestRaceTime > 0);
+ }
+
+ foreach (Player in AllPlayers) {
+	declare netwrite Text[Text][][Text] Net_Leaderboards for UIManager.GetUI(Player);
+	Net_Leaderboards = Leaderboards;
+
+	// Let's get the winner
+	declare Text[] LoginsList;
+	declare Real[Text] RankScores;
+	declare netread Integer[Text][Text] Net_SortedTimes for UIManager.GetUI(Player);
+	declare Text[][Text] SortedLogins = ["CarSport" => [], "CarSnow" => [], "CarRally" => [], "CarDesert" => [] ];
+	// declare Integer[Text][Text] LoginsRanks = ["CarSport" => [], "CarSnow" => [], "CarRally" => [], "CarDesert" => [] ]; 
+	declare Text[Text] WinnersLogins;
+	declare Text OverallWinner;
+	if (Net_SortedTimes.count > 0) {
+		foreach (Model => Times in Net_SortedTimes) {
+			declare Integer Count = 1;
+			foreach (Login => Time in Times) {
+				if (!LoginsList.exists(Login)) LoginsList.add(Login);
+				if (Time == -1) {
+					LoginsRanks[Model][Login] = -1;
+				} else {
+					LoginsRanks[Model][Login] = Count;
+				}
+				Count += 1;
+			}
+		}
+	}
+
+	foreach (Model => LoginRank in LoginsRanks) {
+		foreach (Login => Rank in LoginRank) {
+			if (Rank == -1) {
+
+				LoginsRanks[Model][Login] = LoginsList.count;
+			}
+		}
+
+		foreach (Login in LoginsList) {
+			if (!LoginsRanks[Model].existskey(Login)) {
+				log(Model);
+				LoginsRanks[Model][Login] = LoginsList.count;
+			}
+		}
+	}
+
+	
+	foreach (Login in LoginsList) {
+
+
+
+		declare Real Average;
+
+Average = 1.0*(LoginsRanks["CarSport"][Login] + LoginsRanks["CarSnow"][Login] + LoginsRanks["CarRally"][Login] + LoginsRanks["CarDesert"][Login])/4;
+		
+		RankScores[Login] = Average;
+	}
+
+	RankScores = RankScores.sort();
+
+	declare Integer PodiumCount = 0;
+	foreach (Login => Score in RankScores) {
+		PodiumLogins[PodiumCount] = Login;
+		PodiumCount+=1;
+		if (PodiumCount == 3) {
+			break;
+		}
+	}
+	declare WinnerPlayer = GetPlayer(PodiumLogins[0]);
+	if (WinnerPlayer != Null) Scores::SetPlayerWinner(WinnerPlayer.Score);
+	else Scores::SetPlayerWinner(Null);
+
+ }
+ ***
+ 
+ ***Match_BeforePodiumSequence***
+ ***
+ ModeUtils::PlaySound(CUIConfig::EUISound::EndRound, 0);
+ UIManager.UIAll.UISequence_PodiumPlayersWin = PodiumLogins[0]^","^PodiumLogins[1]^","^PodiumLogins[2];
+ 
+ declare CSmScore WinnerScore <=> Scores::GetPlayerWinner();
+ if (WinnerScore != Null) {
+	 if (!MB_MatchIsRunning()) {
+		 UIModules_BigMessage::SetMessage(_("$<%1$> wins the match!"), WinnerScore.User.WebServicesUserId);
+	 } else {
+		 UIModules_BigMessage::SetMessage(_("$<%1$> wins the track!"), WinnerScore.User.WebServicesUserId);
+	 }
+ } else {
+	//  UIModules_BigMessage::SetMessage(_("|Match|Draw"));
+
+ }
+ 
+ // Compute match trophies
+ Trophy_LiveTimeAttackAchievement_ClearResultList();
+ Race::SortScores(GetScoresSortCriteria());
+ foreach (Key => Score in Scores) {
+	 if (Score.BestRaceTimes.count > 0 && Score.BestRaceTimes[Score.BestRaceTimes.count - 1] >= 0) {
+		 declare Integer UserTrophyRank = TrophyRanking::C_DefaultRank;
+		 if (TrophyRanking::UserIsRanked(Score.User)) {
+			 UserTrophyRank = TrophyRanking::GetUserRank(Score.User);
+		 }
+		 Trophy_LiveTimeAttackAchievement_AddResult(Score.User.WebServicesUserId, Key + 1, UserTrophyRank);
+	 }
+ }
+ Match_TrophyTask = Task::Create(This, Trophy_LiveTimeAttackAchievement_SendResultList(Match_MatchDuration / 1000));
+ Match_TrophyTaskEndTime = Now + C_TrophyTaskTimeout;
+ UIModules_ScoresTable::ResetTrophies();
+ UIModules_EndMatchTrophy::ResetTrophyAnimation();
+ ***
+ 
+ ***Match_PodiumSequence***
+ ***
+ declare CUIConfig::EUISequence PrevUISequence = UIManager.UIAll.UISequence;
+ UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+ MB_Private_Sleep((S_ChatTime*1000)/2);
+
+/*  foreach (Model in ModelIds) {
+	declare ModelName = ModelIds.keyof(Model)
+} */
+/*foreach (CarSportTime in Leaderboards["CarSport"]) {
+		TempCarSportLB.add(CarSportTime);
+}Z*/
+declare Integer[Text][Text] SortedTimes;
+declare Text[][Text] Tops = ["CarSport" => ["", "", ""], "CarSnow" => ["", "", ""], "CarRally" => ["", "", ""], "CarDesert" => ["", "", ""] ];
+foreach (Player in AllPlayers) {
+declare netread Integer[Text][Text] Net_SortedTimes for UIManager.GetUI(Player);
+if (Net_SortedTimes.count > 0) {
+	
+	foreach (Model => Times in Net_SortedTimes) {
+		// 
+		declare Integer Count = 0;
+		foreach(Login => Time in Net_SortedTimes[Model] ) {
+			Tops[Model][Count] = Login;
+			Count += 1;
+			if (Count == 2) {
+				Count = 0;
+				break;
+			}
+		}
+
+	}
+	SortedTimes = Net_SortedTimes;
+}
+}
+declare Text[] ModelNames = ["CarSport", "CarSnow", "CarRally", "CarDesert"];
+foreach (Model in ModelNames) {
+	MB_Sleep(1500);
+	UIManager.UIAll.UISequence_PodiumPlayersWin = Tops[Model][0]^","^Tops[Model][1]^","^Tops[Model][2];
+	
+	if (Tops[Model][0] != "") UIModules_BigMessage::SetMessage(TL::Compose("%1 wins %2!", GetPlayer(Tops[Model][0]).User.Name, Model));
+	else UIModules_BigMessage::SetMessage(TL::Compose("Nobody finished %1!", Model));
+}
+
+ 
+ // Wait until the trophy task is complete
+ Match_TrophyTask = Task::Update(Match_TrophyTask);
+ while (Task::IsInitialized(Match_TrophyTask) && Task::IsRunning(Match_TrophyTask) && Now < Match_TrophyTaskEndTime) {
+	 MB_Yield();
+	 Match_TrophyTask = Task::Update(Match_TrophyTask);
+ }
+ if (Task::IsInitialized(Match_TrophyTask)) {
+	 Match_TrophyTask = Task::Update(Match_TrophyTask);
+	 declare Integer[Integer][Text] AccountsTrophies;
+	 if (!Task::IsRunning(Match_TrophyTask)) {
+		 declare CTaskResult_AccountTrophyGainList SourceTask = Task::GetSourceTask_AccountTrophyGainList(Match_TrophyTask);
+		 if (Task::IsSuccess(Match_TrophyTask) && SourceTask != Null) {
+			 foreach (AccountTrophyGain in SourceTask.AccountTrophyGainList) {
+				 declare Integer[Integer] AccountTrophies = UIModules_ScoresTable::ConvertAccountTrophyGain(AccountTrophyGain);
+				 if (AccountTrophies.count > 0) {
+					 AccountsTrophies[AccountTrophyGain.WebServicesUserId] = AccountTrophies;
+				 }
+			 }
+		 }
+	 }
+	 if (AccountsTrophies.count > 0) {
+		 foreach (Player in AllPlayers) {
+			 if (Player.User != Null) {
+				 declare Integer[Integer] Trophies = AccountsTrophies.get(Player.User.WebServicesUserId, []);
+				 if (Trophies.count > 0) {
+					 Tracking::SendPlayerTrophiesEarned(UIManager, Player, Trophies);
+				 }
+			 }
+		 }
+	 }
+	 Match_TrophyTask = Task::Destroy(Match_TrophyTask);
+	 UIModules_ScoresTable::SetTrophies(AccountsTrophies);
+	 UIModules_EndMatchTrophy::PlayTrophyAnimation(AccountsTrophies);
+	 StateMgr::ForcePlayersStates([StateMgr::C_State_TrophyAnimation]);
+	 MB_Private_Sleep(C_TrophyAnimationDuration);
+	 StateMgr::ForcePlayersStates([StateMgr::C_State_Waiting]);
+ }
+ 
+ UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+ UIModules_BigMessage::SetMessage("");
+ MB_Private_Sleep((S_ChatTime*1000)/2);
+ SetScoresTableScoreMode(Race::IsIndependentLaps(), True);
+ MB_Private_Sleep(C_TrophyDisplayDuration);
+ SetScoresTableScoreMode(Race::IsIndependentLaps(), False);
+ UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+ UIManager.UIAll.UISequence = PrevUISequence;
+ ***
+ 
+ ***Match_AfterPodiumSequence***
+ ***
+ UIModules_BigMessage::SetMessage("");
+ UIModules_ScoresTable::ResetTrophies();
+ ***
+ 
+ 
+ ***Match_BeforeUnloadMap***
+ ***
+ Match_CanForceTrophyRankUpdate = False;
+ ***
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // MARK: Functions
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ /// Select the scores table score mode
+ Void SetScoresTableScoreMode(Boolean _IsIndependentLaps, Boolean _DisplayTrophies) {
+	 if (_DisplayTrophies) UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_Trophy);
+	 else if (_IsIndependentLaps) UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_LapTime);
+	 else UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_BestTime);
+ }
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ /** Update the time limit
+  *
+  *	@param	_StartTime								The starting time of the map
+  *	@param	_NewTimeLimit							The time limit before going to the next map
+  */
+ Void SetTimeLimit(Integer _StartTime, Integer _NewTimeLimit) {
+	 if (_NewTimeLimit <= 0) {
+		 EndTime = -1;
+		 UIModules_ScoresTable::SetFooterInfo(TL::Compose("%1 -", _("Time Limit")));
+	 } else {
+		 EndTime = _StartTime + (_NewTimeLimit * 1000);
+		 UIModules_ScoresTable::SetFooterInfo(TL::Compose("%1 "^TL::TimeToText(_NewTimeLimit*1000), _("Time Limit")));
+	 }
+ }
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ /** Get the right sort criteria for
+  *	the scores
+  *
+  *	@return														The sort criteria
+  */
+ Integer GetScoresSortCriteria() {
+	 if (Race::IsIndependentLaps()) return Race::C_Sort_BestLapTime;
+	 return Race::C_Sort_BestRaceTime;
+ }
+ 
+ // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+ /** Get the right sort criteria for
+  *	the ladder
+  *
+  *	@return														The sort criteria
+  */
+ Integer GetLadderSortCriteria() {
+	 if (Race::IsIndependentLaps()) return Scores::C_Sort_BestLapTime;
+	 return Scores::C_Sort_BestRaceTime;
+ }
+
+ Text GetML() {
+	return """
+	<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+<manialink version="3">
+<frame z-index="20" pos="100 89" id="main"> <!-- y 51 for open -->
+<quad pos="0 1" z-index="0" size="35 5" bgcolor="000" opacity="0.7" halign="center" valign="top" scriptevents="1" id="open-menu"/>
+<quad pos="14 -1.5" z-index="1" size="5 5" bgcolor="FFF" opacity="1" style="UICommon64_1" substyle="ArrowRightSlim_light" halign="center" valign="center" rot="		90" id="arrow"/>
+<quad pos="0 1" z-index="0" size="35 70" bgcolor="000" opacity="0.6" halign="center" valign="bottom"/>
+<label pos="-15 0" z-index="1" size="30 3" text="Change vehicle" textsize="1" textfont="gamefontextrabold" textprefix="$t$i" halign="left" valign="top"/>
+
+<quad pos="0 3" z-index="1" size="35 7" bgcolor="FF0" opacity="0.3" halign="center" valign="bottom" scriptevents="1" id="car-Desert"/>
+<label pos="0 4" z-index="2" size="35 5" text="CarDesert" halign="center" valign="bottom" textfont="GameFontSemiBold"/>
+
+<quad pos="0 12" z-index="1" size="35 7" bgcolor="F80" opacity="0.3" halign="center" valign="bottom" scriptevents="1" id="car-Rally"/>
+<label pos="0 13" z-index="2" size="35 5" text="CarRally" halign="center" valign="bottom" textfont="GameFontSemiBold"/>
+
+<quad pos="0 21" z-index="1" size="35 7" bgcolor="F00" opacity="0.3" halign="center" valign="bottom" scriptevents="1" id="car-Snow"/>
+<label pos="0 22" z-index="2" size="35 5" text="CarSnow" halign="center" valign="bottom" textfont="GameFontSemiBold"/>
+
+<quad pos="0 30" z-index="1" size="35 7" bgcolor="fff" opacity="0.3" halign="center" valign="bottom" scriptevents="1" id="car-Sport"/>
+<label pos="0 31" z-index="2" size="35 5" text="CarSport" halign="center" valign="bottom" textfont="GameFontSemiBold"/>
+</frame>
+<script><!--
+/** @context CTmMlScriptIngame */
+
+#Include "TextLib" as TL
+
+main() {
+	declare ButtonDelta = Now+1000;
+	declare Boolean MenuIsOpen = False;
+	declare CMlFrame FrameMain <=> (Page.GetFirstChild("main") as CMlFrame);
+	declare CMlQuad QuadArrow <=> (Page.GetFirstChild("arrow") as CMlQuad);
+	while (True) {
+		yield;
+
+		foreach (Event in PendingEvents) {
+			if (Event.Type == CMlScriptEvent::Type::MouseClick && Event.ControlId == "open-menu"
+			  || Event.Type == CMlScriptEvent::Type::KeyPress && Event.KeyName == "M") {
+					MenuIsOpen = !MenuIsOpen;
+					QuadArrow.RelativeRotation = QuadArrow.AbsoluteRotation+180;
+					AnimMgr.Flush(FrameMain);
+					if (MenuIsOpen) {
+						
+						AnimMgr.Add(FrameMain, "<frame pos='100 51' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
+					} else {
+						AnimMgr.Add(FrameMain, "<frame pos='100 89' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
+					}
+			} else if (Event.Type == CMlScriptEvent::Type::MouseClick && TL::StartsWith("car-", Event.ControlId)) {
+				if (ButtonDelta < Now) {
+					ButtonDelta = Now+1000;
+					declare Text[] Car = TL::Split("-" , Event.ControlId);
+					SendCustomEvent("ButtonClick", ["Car"^Car[1]]);
+					if (MenuIsOpen) {
+						QuadArrow.RelativeRotation = 90.;
+						AnimMgr.Flush(FrameMain);
+						AnimMgr.Add(FrameMain, "<frame pos='100 89' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
+						MenuIsOpen = False;
+					}
+				}
+
+			} else if (Event.Type == CMlScriptEvent::Type::MouseOver && TL::StartsWith("car-", Event.ControlId)) {
+				declare CMlQuad QuadControl = (Event.Control as CMlQuad);
+				QuadControl.Opacity = 0.7;
+			} else if (Event.Type == CMlScriptEvent::Type::MouseOut && TL::StartsWith("car-", Event.ControlId)) {
+				declare CMlQuad QuadControl = (Event.Control as CMlQuad);
+				QuadControl.Opacity = 0.3;
+			}
+				//SendCustomEvent("ButtonClick", [""^Event.ControlId]);
+		}
+	}
+}
+--></script>
+</manialink>
+""";
+}
+
+Text GetScoreboardML() {
+	return """	
+<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<manialink version="3" name="EnvimixScoreboard">
+	<frame id="carsport" pos="-105 -5" z-index="10">
+		<quad pos="0 67" z-index="1" size="60 10" bgcolor="ccc" halign="center" valign="center" />
+		<label pos="0 66.5" z-index="2" size="60 10" text="CarSport" textfont="GameFontExtraBold"
+			halign="center" textcolor="000" textsize="4" valign="center2" />
+		<quad pos="0 0" z-index="0" size="60 120" bgcolor="FFF" style="Bgs1" substyle="BgDialogBlur"
+			halign="center" valign="center" id="background" />
+        <frame id="players">
+        	<frameinstance modelid="player-rank" pos="0 57.5" />
+			<frameinstance modelid="player-rank" pos="0 52.5" />
+			<frameinstance modelid="player-rank" pos="0 47.5" />
+			<frameinstance modelid="player-rank" pos="0 42.5" />
+			<frameinstance modelid="player-rank" pos="0 37.5" />
+			<frameinstance modelid="player-rank" pos="0 32.5" />
+			<frameinstance modelid="player-rank" pos="0 27.5" />
+			<frameinstance modelid="player-rank" pos="0 22.5" />
+			<frameinstance modelid="player-rank" pos="0 17.5" />
+			<frameinstance modelid="player-rank" pos="0 12.5" />
+			<frameinstance modelid="player-rank" pos="0 7.5" />
+			<frameinstance modelid="player-rank" pos="0 2.5" />
+			<frameinstance modelid="player-rank" pos="0 -2.5" />
+			<frameinstance modelid="player-rank" pos="0 -7.5" />
+			<frameinstance modelid="player-rank" pos="0 -12.5" />
+			<frameinstance modelid="player-rank" pos="0 -17.5" />
+			<frameinstance modelid="player-rank" pos="0 -22.5" />
+			<frameinstance modelid="player-rank" pos="0 -27.5" />
+			<frameinstance modelid="player-rank" pos="0 -32.5" />
+			<frameinstance modelid="player-rank" pos="0 -37.5" />
+			<frameinstance modelid="player-rank" pos="0 -42.5" />
+			<frameinstance modelid="player-rank" pos="0 -47.5" />
+			<frameinstance modelid="player-rank" pos="0 -52.5" />
+			<frameinstance modelid="player-rank" pos="0 -57.5" />
+        </frame>
+	</frame>
+
+	<frame id="carsnow" pos="-35 -5" z-index="10">
+		<quad pos="0 67" z-index="1" size="60 10" bgcolor="d00" halign="center" valign="center" />
+		<label pos="0 66.5" z-index="2" size="60 10" text="CarSnow" textfont="GameFontExtraBold"
+			halign="center" textcolor="ff" textsize="4" valign="center2" />
+		<quad pos="0 0" z-index="0" size="60 120" bgcolor="FFF" style="Bgs1" substyle="BgDialogBlur"
+			halign="center" valign="center" id="background" />
+        <frame id="players">
+        	<frameinstance modelid="player-rank" pos="0 57.5" />
+			<frameinstance modelid="player-rank" pos="0 52.5" />
+			<frameinstance modelid="player-rank" pos="0 47.5" />
+			<frameinstance modelid="player-rank" pos="0 42.5" />
+			<frameinstance modelid="player-rank" pos="0 37.5" />
+			<frameinstance modelid="player-rank" pos="0 32.5" />
+			<frameinstance modelid="player-rank" pos="0 27.5" />
+			<frameinstance modelid="player-rank" pos="0 22.5" />
+			<frameinstance modelid="player-rank" pos="0 17.5" />
+			<frameinstance modelid="player-rank" pos="0 12.5" />
+			<frameinstance modelid="player-rank" pos="0 7.5" />
+			<frameinstance modelid="player-rank" pos="0 2.5" />
+			<frameinstance modelid="player-rank" pos="0 -2.5" />
+			<frameinstance modelid="player-rank" pos="0 -7.5" />
+			<frameinstance modelid="player-rank" pos="0 -12.5" />
+			<frameinstance modelid="player-rank" pos="0 -17.5" />
+			<frameinstance modelid="player-rank" pos="0 -22.5" />
+			<frameinstance modelid="player-rank" pos="0 -27.5" />
+			<frameinstance modelid="player-rank" pos="0 -32.5" />
+			<frameinstance modelid="player-rank" pos="0 -37.5" />
+			<frameinstance modelid="player-rank" pos="0 -42.5" />
+			<frameinstance modelid="player-rank" pos="0 -47.5" />
+			<frameinstance modelid="player-rank" pos="0 -52.5" />
+			<frameinstance modelid="player-rank" pos="0 -57.5" />
+        </frame>
+	</frame>
+
+	<frame id="carrally" pos="35 -5" z-index="10">
+		<quad pos="0 67" z-index="1" size="60 10" bgcolor="f80" halign="center" valign="center" />
+		<label pos="0 66.5" z-index="2" size="60 10" text="CarRally" textfont="GameFontExtraBold"
+			halign="center" textcolor="000" textsize="4" valign="center2" />
+		<quad pos="0 0" z-index="0" size="60 120" bgcolor="FFF" style="Bgs1" substyle="BgDialogBlur"
+			halign="center" valign="center" id="background" />
+        <frame id="players">
+        	<frameinstance modelid="player-rank" pos="0 57.5" />
+			<frameinstance modelid="player-rank" pos="0 52.5" />
+			<frameinstance modelid="player-rank" pos="0 47.5" />
+			<frameinstance modelid="player-rank" pos="0 42.5" />
+			<frameinstance modelid="player-rank" pos="0 37.5" />
+			<frameinstance modelid="player-rank" pos="0 32.5" />
+			<frameinstance modelid="player-rank" pos="0 27.5" />
+			<frameinstance modelid="player-rank" pos="0 22.5" />
+			<frameinstance modelid="player-rank" pos="0 17.5" />
+			<frameinstance modelid="player-rank" pos="0 12.5" />
+			<frameinstance modelid="player-rank" pos="0 7.5" />
+			<frameinstance modelid="player-rank" pos="0 2.5" />
+			<frameinstance modelid="player-rank" pos="0 -2.5" />
+			<frameinstance modelid="player-rank" pos="0 -7.5" />
+			<frameinstance modelid="player-rank" pos="0 -12.5" />
+			<frameinstance modelid="player-rank" pos="0 -17.5" />
+			<frameinstance modelid="player-rank" pos="0 -22.5" />
+			<frameinstance modelid="player-rank" pos="0 -27.5" />
+			<frameinstance modelid="player-rank" pos="0 -32.5" />
+			<frameinstance modelid="player-rank" pos="0 -37.5" />
+			<frameinstance modelid="player-rank" pos="0 -42.5" />
+			<frameinstance modelid="player-rank" pos="0 -47.5" />
+			<frameinstance modelid="player-rank" pos="0 -52.5" />
+			<frameinstance modelid="player-rank" pos="0 -57.5" />
+        </frame>
+	</frame>
+
+	<frame id="cardesert" pos="105 -5" z-index="10">
+		<quad pos="0 67" z-index="1" size="60 10" bgcolor="fd0" halign="center" valign="center" />
+		<label pos="0 66.5" z-index="2" size="60 10" text="CarDesert" textfont="GameFontExtraBold"
+			halign="center" textcolor="000" textsize="4" valign="center2" />
+		<quad pos="0 0" z-index="0" size="60 120" bgcolor="FFF" style="Bgs1" substyle="BgDialogBlur"
+			halign="center" valign="center" id="background" />
+        <frame id="players">
+        	<frameinstance modelid="player-rank" pos="0 57.5" />
+			<frameinstance modelid="player-rank" pos="0 52.5" />
+			<frameinstance modelid="player-rank" pos="0 47.5" />
+			<frameinstance modelid="player-rank" pos="0 42.5" />
+			<frameinstance modelid="player-rank" pos="0 37.5" />
+			<frameinstance modelid="player-rank" pos="0 32.5" />
+			<frameinstance modelid="player-rank" pos="0 27.5" />
+			<frameinstance modelid="player-rank" pos="0 22.5" />
+			<frameinstance modelid="player-rank" pos="0 17.5" />
+			<frameinstance modelid="player-rank" pos="0 12.5" />
+			<frameinstance modelid="player-rank" pos="0 7.5" />
+			<frameinstance modelid="player-rank" pos="0 2.5" />
+			<frameinstance modelid="player-rank" pos="0 -2.5" />
+			<frameinstance modelid="player-rank" pos="0 -7.5" />
+			<frameinstance modelid="player-rank" pos="0 -12.5" />
+			<frameinstance modelid="player-rank" pos="0 -17.5" />
+			<frameinstance modelid="player-rank" pos="0 -22.5" />
+			<frameinstance modelid="player-rank" pos="0 -27.5" />
+			<frameinstance modelid="player-rank" pos="0 -32.5" />
+			<frameinstance modelid="player-rank" pos="0 -37.5" />
+			<frameinstance modelid="player-rank" pos="0 -42.5" />
+			<frameinstance modelid="player-rank" pos="0 -47.5" />
+			<frameinstance modelid="player-rank" pos="0 -52.5" />
+			<frameinstance modelid="player-rank" pos="0 -57.5" />
+        </frame>
+	</frame>
+	
+	<frame id="map" pos="-135 80">
+	  <label pos="0 0" z-index="0" size="92.9 6.98" text="Summer 2024 - 25" textprefix="$s" textfont="gamefontextrabold" textsize="5" id="map-name"/>	
+	  <label pos="0 -6" z-index="0" size="92.9 5.2" text="by Nadeo" textprefix="$s" textfont="gamefontsemibold" textsize="3" id="map-author"/>
+	</frame>
+
+	<framemodel id="player-rank">
+		<quad pos="0 0" z-index="0" size="60 4" bgcolor="000" opacity="0." halign="center"
+			valign="center" id="background" />
+		<label pos="-26.7 0" z-index="0" size="5 5" text="1" keepratio="Clip"
+			textfont="gamefontextrabold" halign="center" valign="center" textsize="1" id="rank" />
+		<quad pos="-24 0" z-index="0" size="6 4" bgcolor="000" opacity="1" valign="center" id="flag"
+			keepratio="Clip" image="file://Media/Flags/WOR.dds" />
+		<quad pos="-18 0" z-index="1" size="1.5 4" bgcolor="000" opacity="1" valign="center"
+			id="echelon" style="Hud3dEchelons" substyle="EchelonGold3" halign="right" scale="-1" hidden="1"/>
+		<label pos="-16 0" z-index="0" size="35 5" text="[ABCDE] VeryLongNameTest" keepratio="Clip"
+			textfont="gamefontsemibold" valign="center" textsize="1" id="player-name" />
+		<label pos="29 0" z-index="0" size="10.1 5" text="-:--.---" keepratio="Clip"
+			textfont="oswaldmono" valign="center" textsize="1" id="player-time" halign="right" />
+	</framemodel>
+
+	<framemodel id="player-rank2">
+		<label z-index="0" size="5 5" text="1)" valign="center2" textsize="2" pos="0 0"
+			scriptevents="1" style="TextCardMedium" id="Label_Spectate" textemboss="1" />
+		<label pos="4 -.35" z-index="0" size="23 5" text="BigBang1112" valign="center2" textsize="1"
+			textfont="RajdhaniMono" style="TextCardMedium" id="Label_Name" scriptevents="1"
+			textcolor="FFF" textemboss="1" />
+		<label pos="43 -0.3" z-index="0" size="15 5" text="-:--.---" valign="center2" textsize="2"
+			textfont="RajdhaniMono" style="TextCardMedium" halign="right" id="Label_Time"
+			textemboss="1" />
+		<quad pos="-1" z-index="-1" size="46 4" bgcolor="FFFF" valign="center" style="Bgs1"
+			substyle="BgMetalBar" id="Quad_Highlight" hidden="1" />
+	</framemodel>
+	<script><!--
+	#Include "TextLib" as TL
+	
+	#Struct K_ScoreboardFrame {
+		CMlQuad HeaderBg;
+		CMlLabel HeaderText;
+		CMlQuad ScoresBg;
+		CMlFrame ScoresPlayers;
+	}
+    
+    CSmPlayer GetPlayer(Text _Login) {
+        foreach (Player in Players) {
+            if (Player.User.Login == _Login) {
+                return Player;
+            }
+        }
+        return Null;
+    }
+
+    Text GetPlayerNameWithClubTag(CSmPlayer _Player) {
+        if (_Player.User.ClubTag != "") {
+            return TL::Compose("[$<%1$>] %2", _Player.User.ClubTag, _Player.User.Name);
+        }
+        return _Player.User.Name;
+    }
+	
+	main() {
+		declare netread Text[Text][][Text] Net_Leaderboards for UI;
+		declare netwrite Integer[Text][Text] Net_SortedTimes for UI;
+
+		Net_SortedTimes = [ "CarSport" => Integer[Text], "CarSnow" => Integer[Text], "CarRally" => Integer[Text], "CarDesert" => Integer[Text] ];
+
+		declare CMlFrame CarSportFrame = (Page.GetFirstChild("carsport") as CMlFrame);
+		declare K_ScoreboardFrame CarSport = K_ScoreboardFrame {
+			HeaderBg = (CarSportFrame.Controls[0] as CMlQuad),
+			HeaderText = (CarSportFrame.Controls[1] as CMlLabel),
+			ScoresBg = (CarSportFrame.Controls[2] as CMlQuad),
+			ScoresPlayers = (CarSportFrame.Controls[3] as CMlFrame)
+		};
+
+		declare CMlFrame CarSnowFrame = (Page.GetFirstChild("carsnow") as CMlFrame);
+		declare K_ScoreboardFrame CarSnow = K_ScoreboardFrame {
+			HeaderBg = (CarSnowFrame.Controls[0] as CMlQuad),
+			HeaderText = (CarSnowFrame.Controls[1] as CMlLabel),
+			ScoresBg = (CarSnowFrame.Controls[2] as CMlQuad),
+			ScoresPlayers = (CarSnowFrame.Controls[3] as CMlFrame)
+		};
+
+		declare CMlFrame CarRallyFrame = (Page.GetFirstChild("carrally") as CMlFrame);
+		declare K_ScoreboardFrame CarRally = K_ScoreboardFrame {
+			HeaderBg = (CarRallyFrame.Controls[0] as CMlQuad),
+			HeaderText = (CarRallyFrame.Controls[1] as CMlLabel),
+			ScoresBg = (CarRallyFrame.Controls[2] as CMlQuad),
+			ScoresPlayers = (CarRallyFrame.Controls[3] as CMlFrame)
+		};
+
+		declare CMlFrame CarDesertFrame = (Page.GetFirstChild("cardesert") as CMlFrame);
+		declare K_ScoreboardFrame CarDesert = K_ScoreboardFrame {
+			HeaderBg = (CarDesertFrame.Controls[0] as CMlQuad),
+			HeaderText = (CarDesertFrame.Controls[1] as CMlLabel),
+			ScoresBg = (CarDesertFrame.Controls[2] as CMlQuad),
+			ScoresPlayers = (CarDesertFrame.Controls[3] as CMlFrame)
+		};
+
+		declare K_ScoreboardFrame[Text] LeaderboardFrames = [
+			"CarSport"=>CarSport,
+			"CarSnow"=>CarSnow,
+			"CarRally"=>CarRally,
+			"CarDesert"=>CarDesert
+        ];
+		declare CMlLabel MapNameLabel = (Page.GetFirstChild("map-name") as CMlLabel);
+		declare CMlLabel MapAuthorLabel = (Page.GetFirstChild("map-author") as CMlLabel);
+		while (True) {
+			yield;
+			MapNameLabel.Value = Map.MapInfo.Name;
+			MapAuthorLabel.Value = TL::Compose(_("by %1"), Map.MapInfo.AuthorNickName);
+			// CarSport.HeaderText.Value = _("Stadium Car");
+
+			foreach (ModelName => ModelLeaderboard in Net_Leaderboards) {
+				declare Integer[Text] Times;
+				declare Text[Text][Text] Info;
+
+				for (i, 0, ModelLeaderboard.count-1) {
+					if (ModelLeaderboard[i]["Time"] != "-1") {
+						Times[ModelLeaderboard[i]["Login"]] = TL::ToInteger(ModelLeaderboard[i]["Time"]);
+					}
+				}
+
+                declare SortedTimes = Times.sort();
+				Net_SortedTimes[ModelName] = SortedTimes;
+
+                for (i,0,ModelLeaderboard.count-1) {
+                    if (ModelLeaderboard[i]["Time"] == "-1") {
+                       // SortedTimes7
+                       SortedTimes[ModelLeaderboard[i]["Login"]] = -1;
+                    }
+                }
+                declare Integer Count = 0;
+                foreach (Login => Time in SortedTimes) {
+					if (Count < 24) {
+						declare CMlFrame Line <=> (LeaderboardFrames[ModelName].ScoresPlayers.Controls[Count] as CMlFrame);
+
+						declare CMlQuad LineBg <=> (Line.GetFirstChild("background") as CMlQuad);
+						declare CMlLabel LineRank <=> (Line.GetFirstChild("rank") as CMlLabel);
+						declare CMlQuad LineFlag <=> (Line.GetFirstChild("flag") as CMlQuad);
+						declare CMlLabel LineName <=> (Line.GetFirstChild("player-name") as CMlLabel);
+						declare CMlLabel LineTime <=> (Line.GetFirstChild("player-time") as CMlLabel);
+	
+						declare Player <=> GetPlayer(Login);
+	
+						Line.Show();
+	
+						if (Player == GUIPlayer) LineBg.Opacity = 0.5;
+						else LineBg.Opacity = 0.;
+	
+						LineRank.Value = ""^Count+1;
+						if (Player != Null) {
+							LineFlag.ImageUrl = Player.User.CountryFlagUrl;
+							LineName.Value = GetPlayerNameWithClubTag(Player);
+							LineName.Opacity = 1.;
+						} else {
+							LineName.Opacity = 0.5;
+						}
+	
+						if (Time > -1) LineTime.Value = TL::TimeToText(Time, True, True);
+						else LineTime.Value = "-:--.---";
+	
+						Count +=1;
+					}	
+                }
+
+                for (i, 0, 23-Count) {
+                    declare CMlFrame Line <=> (LeaderboardFrames[ModelName].ScoresPlayers.Controls[23-i] as CMlFrame);
+
+                    Line.Hide();
+                }
+
+			}
+		}
+	}
+
+	--></script>
+	
+</manialink>
+	""";
+}
+
+Void InitUI() {
+	// gameplay
+    Layers::Create("Envimix", GetML());
+    Layers::SetType("Envimix", CUILayer::EUILayerType::Normal);
+	Layers::Attach("Envimix");
+    Layers::SetVisibility("Envimix", True);
+
+	Layers::Create("EnvimixScoreboard", GetScoreboardML());
+    Layers::SetType("EnvimixScoreboard", CUILayer::EUILayerType::ScoresTable);
+	Layers::Attach("EnvimixScoreboard");
+    Layers::SetVisibility("EnvimixScoreboard", True);
+}
+
+Text GetRandomCar(Boolean _BlackMarket) {
+	declare Text[] ModelNames = [
+
+	"CarSport", 
+	"CarSnow", 
+	"CarRally", 
+	"CarDesert", 
+	   "DesertCar", 
+	   "SnowCar", 
+	   "RallyCar", 
+	   "IslandCar", 
+	   "BayCar", 
+	   "CoastCar", 
+	   "StadiumCar", 
+	   "CanyonCar", 
+	   "ValleyCar", 
+	   "LagoonCar", 
+	   "TrafficCar"
+];
+if (!_BlackMarket) return ModelNames[ML::Rand(0,3)];
+return ModelNames[ML::Rand(0,ModelNames.count-1)];
+}
+
+Text GetVehicleTrigram(Text _VehicleName) {
+	log(_VehicleName);
+	switch (_VehicleName) {
+		case "CarSport": { return "STM"; }
+		case "CarSnow": { return "SNO"; }
+		case "CarRally": { return "RLY"; }
+		case "CarDesert": { return "DSR"; }
+		case "BayCar": { return "BAY"; }
+		case "CanyonCar": { return "CAN"; }
+		case "CoastCar": { return "COA"; }
+		case "DesertCar": { return "DSR"; }
+		case "IslandCar": { return "ISL"; }
+		case "LagoonCar": { return "LAG"; }
+		case "RallyCar": { return "RLY"; }
+		case "StadiumCar": { return "STM"; }
+		case "SnowCar": { return "SNO"; }
+		case "TrafficCar": { return "TRF"; }
+		case "ValleyCar": { return "VLY"; }
+	}
+	return "";
+}

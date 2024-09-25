@@ -1,0 +1,1142 @@
+/**
+ * @context CSmMode
+ */
+#Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
+
+#Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race,TrackMania\\TM_Stunt,TM_Stunt"
+#Const	Version							"2024-07-08"
+#Const	ScriptName					"Modes/TrackMania/TM_ClassicStuntAttack_Online.Script.txt"
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// MARK: Libraries
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+#Include "TextLib" as TL
+#Include "MathLib" as ML
+#Include "Libs/Nadeo/CMGame/Utils/Task.Script.txt" as Task
+#Include "Libs/Zai/Common/Bots.Script.txt" as Bots
+#Include "Libs/Nadeo/Trackmania/Modes/TimeAttack/StateManager.Script.txt" as StateMgr
+#Include "Libs/Nadeo/Trackmania/Modes/TrophyRanking.Script.txt" as TrophyRanking
+#Include "Libs/Nadeo/Trackmania/MainMenu/Constants.Script.txt" as MenuConsts
+#Include "Libs/Nadeo/TMGame/Utils/Tracking.Script.txt" as Tracking
+// UI from Race
+#Include "Libs/Nadeo/TMGame/Modes/Base/UIModules/TimeGap_Server.Script.txt" as UIModules_TimeGap
+#Include "Libs/Nadeo/TMGame/Modes/Base/UIModules/Checkpoint_Server.Script.txt" as UIModules_Checkpoint
+#Include "Libs/Nadeo/TMGame/Modes/Base/UIModules/PauseMenuOnline_Server.Script.txt" as UIModules_PauseMenu_Online
+#Include "Libs/Nadeo/Trackmania/Modes/TimeAttack/UIModules/EndMatchTrophy_Server.Script.txt" as UIModules_EndMatchTrophy
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// MARK: Settings
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+#Setting S_TimeLimit 300 as _("Time limit") ///< Time limit before going to the next map
+#Setting S_WarmUpNb 0 as _("Number of warm up")
+#Setting S_WarmUpDuration 0 as _("Duration of one warm up")
+#Setting S_WarmUpTimeout -1 as _("Warm up timeout")
+#Setting S_ScriptEnvironment "development"
+// Stunt mode needs TrustClientSimu to False
+// #Setting S_TrustClientSimu False
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// MARK: Constants
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+#Const C_ModeName "Classic Stunt Attack"
+//L16N [Time Attack] Description of the mode rules
+#Const Description _("$zIn $<$t$6F9Stunt Attack$> mode, the goal is to get the $<$t$6F9most points$>.\n\nYou have as many tries as you want, and you can $<$t$6F9retry$> when you want by pressing the respawn button.\n\nWhen the time is up, the $<$t$6F9winner$> is the player with the $<$t$6F9most points$>.\n\n You gain points by doing tricks. You can also build up a $<$t$6F9combo$> by doing many stunts in quick succession.")
+
+#Const C_HudModulePath "" //< Path to the hud module
+#Const C_ManiaAppUrl "file://Media/ManiaApps/Nadeo/Trackmania/Modes/TimeAttack.Script.txt" //< Url of the mania app
+#Const C_FakeUsersNb 0
+
+#Const C_UploadRecord False
+#Const C_DisplayRecordGhost False
+#Const C_DisplayRecordMedal False
+#Const C_CelebrateRecordGhost False
+#Const C_CelebrateRecordMedal False
+#Const C_DisplayWorldTop False
+
+#Const C_TrophyTaskTimeout 5000
+#Const C_TrophyAnimationDuration 4000
+#Const C_TrophyDisplayDuration 7000
+
+// Have to make structs, because CStuntFigure and CStuntStatus 
+// are broken in ManiaLink and they can't be network variables.
+#Struct K_StuntStatus {
+	Integer LatestFigureTime; 
+	Boolean IsInFigure;	 
+	Boolean IsNoAirControl;	 
+	Boolean IsEpicAirControl;	 
+	Boolean IsMasterAirControl;	 
+	Integer ChainCounter;	 
+	Integer ChainDelay;	 
+	Integer TimeLeftForStuntCombo;	 
+	Integer TimeElapsedSinceLastStunt;
+}
+
+
+#Struct K_StuntFigure {
+	Integer Name;
+	Integer Combo;
+	Integer Angle;
+	Integer Points;
+	Real Factor;
+	Boolean StraightLanding;
+	Boolean ReverseLanding;
+	Boolean PerfectLanding;
+	Boolean MasterJump;
+	Boolean MasterLanding;
+	Boolean EpicLanding;
+	Boolean Wreck;
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// MARK: Extends
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+***Match_LogVersions***
+***
+Log::RegisterScript(ScriptName, Version);
+Log::RegisterScript(StateMgr::ScriptName, StateMgr::Version);
+***
+
+***Match_LoadLibraries***
+***
+StateMgr::Load();
+***
+
+***Match_UnloadLibraries***
+***
+StateMgr::Unload();
+***
+
+***Match_Settings***
+***
+MB_Settings_UseDefaultTimer = False;
+MB_Settings_UseDefaultHud = (C_HudModulePath == "");
+MB_Settings_UseDefaultPodiumSequence = False;
+***
+
+***Match_Rules***
+***
+ModeInfo::SetName(C_ModeName);
+ModeInfo::SetType(ModeInfo::C_Type_FreeForAll);
+ModeInfo::SetRules(Description);
+ModeInfo::SetStatusMessage(_("TYPE: Free for all\nOBJECTIVE: Get the most points on the track."));
+***
+
+***Match_LoadHud***
+***
+if (C_HudModulePath != "") Hud_Load(C_HudModulePath);
+***
+
+***Match_AfterLoadHud***
+***
+UIManager.UIAll.ScoreTableOnlyManialink = True;
+UIModules_Checkpoint::SetRankMode(UIModules_Checkpoint::C_RankMode_BestRace);
+ClientManiaAppUrl = C_ManiaAppUrl;
+Race::SortScores(GetScoresSortCriteria());
+UIModules_TimeGap::SetTimeGapMode(UIModules_TimeGap::C_TimeGapMode_Hidden);
+UIModules_PauseMenu_Online::SetHelp(Description);
+UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_Points);
+UIModules_Sign16x9Small::SetScoreMode(UIModules_Sign16x9Small::C_ScoreMode_Points);
+UIManager.UIAll.OverlayHideCountdown = True;
+UIManager.UIAll.OverlayHideSpectatorInfos = True;
+
+// remove timer
+UIModules::UnloadModules(["UIModule_Race_Chrono"]);
+
+***
+
+***Match_Yield***
+***
+foreach (Event in PendingEvents) {
+	switch (Event.Type) {
+		// Initialize players when they join the server
+		case CSmModeEvent::EType::OnPlayerAdded: {
+			StateMgr::InitializePlayer(Event.Player);
+			CarRank::InitializePlayer(Event.Player);
+			if (Event.Player != Null) {
+				declare Boolean Match_CanForceTrophyRankUpdate for This;
+				TrophyRanking::InitializeUser(Event.Player.User, Match_CanForceTrophyRankUpdate);
+			}
+		}
+	}
+}
+StateMgr::Yield();
+TrophyRanking::Yield();
+***
+
+***Match_StartServer***
+***
+UseStunts = True;
+UseLaunchedCheckpoints = False;
+// Initialize mode
+Clans::SetClansNb(0);
+Scores::SaveInScore(Scores::C_Points_Map);
+GiveUpBehaviour_RespawnAfter = True;
+CrudeExtrapolation_AllowDelay = True;
+Race::SetRespawnBehaviour(Race::C_RespawnBehaviour_Normal);
+StateMgr::ForcePlayersStates([StateMgr::C_State_Waiting]);
+WarmUp::SetAvailability(True);
+Race::SetupRecord(
+	MenuConsts::C_ScopeType_Season,
+	MenuConsts::C_ScopeType_PersonalBest,
+	MenuConsts::C_GameMode_TimeAttack,
+	"",
+	C_UploadRecord,
+	C_DisplayRecordGhost,
+	C_DisplayRecordMedal,
+	C_CelebrateRecordGhost,
+	C_CelebrateRecordMedal,
+	C_DisplayWorldTop
+);
+CarRank::Reset();
+***
+
+***Match_InitMatch***
+***
+declare Task::K_Task Match_TrophyTask;
+declare Integer Match_TrophyTaskEndTime;
+declare Integer Match_MatchDuration;
+declare Boolean Match_CanForceTrophyRankUpdate for This = False;
+***
+
+***Match_AfterLoadMap***
+***
+Match_CanForceTrophyRankUpdate = True;
+***
+
+***Match_InitMap***
+***
+Race::UseAutomaticDossardColor(False);
+// Users_DestroyAllFakes();
+// Bots::SpawnFakePlayers(20, 0);
+declare Integer StuntTimeLimit;
+declare Integer Map_TimeLimit;
+declare Integer Map_MapStartTime;
+***
+
+***Match_StartMap***
+***
+declare metadata Integer Metadata_StuntTimeLimit for Map;
+
+if (Metadata_StuntTimeLimit <= 0) {
+	StuntTimeLimit = 60000;
+} else {
+	StuntTimeLimit = Metadata_StuntTimeLimit*1000;
+}
+// Add bot when necessary
+// Users_SetNbFakeUsers(C_FakeUsersNb, 0);
+
+// Warm up
+UIModules_ScoresTable::SetFooterInfo(_("Warmup"));
+GiveUpBehaviour_RespawnAfter = False;
+MB_WarmUp(S_WarmUpNb, S_WarmUpDuration * 1000, S_WarmUpTimeout * 1000);
+GiveUpBehaviour_RespawnAfter = True;
+
+// Initialize race
+SetScoresTableScoreMode(Race::IsIndependentLaps(), False);
+StartTime = Now + Race::C_SpawnDuration;
+Map_TimeLimit = S_TimeLimit;
+Map_MapStartTime = StartTime;
+SetTimeLimit(StartTime, S_TimeLimit);
+
+// Spawn players for the race
+foreach (Player in Players) {
+	declare Integer RunPoints for Player;
+	declare netwrite K_StuntFigure Net_LatestStuntFigure for Player;
+	declare netwrite K_StuntStatus Net_StuntStatus for Player;
+
+	
+	Net_LatestStuntFigure = K_StuntFigure {
+		Name = -1,
+		Combo = 0,
+		Angle = 0,
+		Points = 0,
+		Factor = 1.,
+		StraightLanding = False,
+		ReverseLanding = False,
+		PerfectLanding = False,
+		MasterJump = False,
+		MasterLanding = False,
+		EpicLanding = False,
+		Wreck = False
+	};
+
+	Net_StuntStatus.LatestFigureTime = Now;
+
+	RunPoints = 0;
+	Race::Start(Player, StartTime);
+}
+Layers::SetVisibility("StuntUI", True);
+
+
+StateMgr::ForcePlayersStates([StateMgr::C_State_Playing]);
+CarRank::Update(CarRank::C_SortCriteria_BestRace);
+Race::EnableIntroDuringMatch(True);
+InitUI();
+***
+
+***Match_PlayLoop***
+***
+// Manage race events
+declare RacePendingEvents = Race::GetPendingEvents();
+foreach (Event in RacePendingEvents) {
+	Race::ValidEvent(Event);
+	// Waypoint
+	if (Event.Type == Events::C_Type_Waypoint) {
+		if (Event.Player != Null) {
+			declare Integer RunPoints for Event.Player;
+			declare Better = False;
+			declare OldRank = 0;
+			if (Event.IsEndRace) {
+				// Computes old rank before changing Score
+				foreach (Index => Score in Scores) {
+					if (Score.Id == Event.Player.Score.Id) {
+						if (Score.Points != 0) {
+							OldRank = Index + 1;
+						} else {
+							OldRank = -123;
+						}
+						break;
+					}
+				}
+				// log(Scores::GetPlayerMapPoints(Event.Player.Score));
+				// log(RunPoints);
+				Better = Scores::GetPlayerMapPoints(Event.Player.Score) < RunPoints;
+				if (Better) Scores::SetPlayerMapPoints(Event.Player.Score, RunPoints);
+				// declare BetterLap = Scores::UpdatePlayerBestLapIfBetter(Event.Player);
+				Scores::UpdatePlayerPrevRace(Event.Player);
+				Race::SortScores(GetScoresSortCriteria());
+			}
+				Race::SortScores(GetScoresSortCriteria());
+			if (Better) {
+				declare NewRank = 0;
+				foreach (Index => Score in Scores) {
+					if (Score.Id == Event.Player.Score.Id) {
+						NewRank = Index + 1;
+						break;
+					}
+				}
+				if (OldRank != NewRank) {
+					if (0 < NewRank && NewRank < 4) {
+						foreach (Player in AllPlayers) {
+							UIModules_DisplayMessage::SendLiveMessage_RankUpdate(Player, Event.Player.User, NewRank);
+						}
+					} else if (0 < NewRank) {
+						UIModules_DisplayMessage::SendLiveMessage_RankUpdate(Event.Player, Event.Player.User, NewRank);
+					}
+				}
+
+				CarRank::ThrottleUpdate(CarRank::C_SortCriteria_TotalPoints);
+			}
+
+		}
+	} else if (Event.Type == Events::C_Type_Respawn) {
+		declare Integer RunPoints for Event.Player;
+		declare netwrite K_StuntFigure Net_LatestStuntFigure for Event.Player;
+		declare netwrite K_StuntStatus Net_StuntStatus for Event.Player;
+
+		Net_LatestStuntFigure = K_StuntFigure {
+			Name = -2,
+			Combo = 0,
+			Angle = 0,
+			Points = -50,
+			Factor = 1.,
+			StraightLanding = False,
+			ReverseLanding = False,
+			PerfectLanding = False,
+			MasterJump = False,
+			MasterLanding = False,
+			EpicLanding = False,
+			Wreck = False
+		};
+
+		Net_StuntStatus.LatestFigureTime = Now;
+
+		RunPoints -= 50;
+		if (RunPoints < 0) RunPoints = 0;
+	} else if (Event.Type == Events::C_Type_GiveUp) {
+		declare Integer RunPoints for Event.Player;
+		declare netwrite K_StuntFigure Net_LatestStuntFigure for Event.Player;
+		declare netwrite K_StuntStatus Net_StuntStatus for Event.Player;
+		declare netwrite Integer Net_PlayerTimeLimit for Event.Player;
+
+		
+		Net_LatestStuntFigure = K_StuntFigure {
+			Name = -1,
+			Combo = 0,
+			Angle = 0,
+			Points = 0,
+			Factor = 1.,
+			StraightLanding = False,
+			ReverseLanding = False,
+			PerfectLanding = False,
+			MasterJump = False,
+			MasterLanding = False,
+			EpicLanding = False,
+			Wreck = False
+		};
+
+		Net_StuntStatus.LatestFigureTime = Now;
+
+		RunPoints = 0;
+	}
+}
+
+
+
+// Manage mode events
+foreach (Event in PendingEvents) {
+	if (Event.HasBeenPassed || Event.HasBeenDiscarded) continue;
+	if (Event.Type == CSmModeEvent::EType::OnStuntFigure) {
+		declare Integer RunPoints for Event.Player;
+		declare netwrite K_StuntStatus Net_StuntStatus for Event.Player;
+		declare netwrite K_StuntFigure Net_LatestStuntFigure for Event.Player;
+		// declare netwrite CStuntFigure::EStuntName Net_LatestStunatFigure for Event.Player;
+		
+		// declare Integer StuntName = Event.StuntFigure.Name*1;
+		if (UIManager.GetUI(Event.Player).UISequence != CUIConfig::EUISequence::Finish) {
+			Net_LatestStuntFigure = K_StuntFigure {
+				Name = StuntNameToInt(Event.StuntFigure.Name),
+				Combo = Event.StuntFigure.Combo,
+				Angle = Event.StuntFigure.Angle,
+				Points = Event.StuntFigure.Points,
+				Factor = Event.StuntFigure.Factor,
+				StraightLanding = Event.StuntFigure.StraightLanding,
+				ReverseLanding = Event.StuntFigure.ReverseLanding,
+				PerfectLanding = Event.StuntFigure.PerfectLanding,
+				MasterJump = Event.StuntFigure.MasterJump,
+				MasterLanding = Event.StuntFigure.MasterLanding,
+				EpicLanding = Event.StuntFigure.EpicLanding,
+				Wreck = Event.StuntFigure.Wreck
+			};
+	
+			Net_StuntStatus.LatestFigureTime = Now;
+			// UIManager.UIAll.StatusMessage = GetFullStuntName(Event.StuntFigure);
+			// UIManager.UIAll.BigMessage = "+"^Event.StuntFigure.Points;
+			RunPoints += Event.StuntFigure.Points;
+		}
+
+	}
+	else Events::Invalid(Event);
+}
+
+foreach(Player in Players) {
+	declare Integer OgRunPoints for Player;
+	declare Integer RunPoints for Player;
+	declare netwrite Integer Net_PlayerTimeLimit for Player;
+	declare netwrite Integer Net_RunPoints for Player;
+	declare netwrite K_StuntStatus Net_StuntStatus for Player;
+    declare netwrite K_StuntFigure Net_LatestStuntFigure for Player;
+
+	Net_PlayerTimeLimit = Player.StartTime+StuntTimeLimit;
+
+	if (Player.CurrentLapTime < 0) {
+		RunPoints = 0;
+	}
+	// Net_PlayerTimeLimit -= 10;
+	if (Net_PlayerTimeLimit-Now < 0) {
+		if (UIManager.GetUI(Player).UISequence != CUIConfig::EUISequence::Finish) {
+			Net_LatestStuntFigure = K_StuntFigure {
+				Name = -3,
+				Combo = 0,
+				Angle = 0,
+				Points = -1,
+				Factor = 1.,
+				StraightLanding = False,
+				ReverseLanding = False,
+				PerfectLanding = False,
+				MasterJump = False,
+				MasterLanding = False,
+				EpicLanding = False,
+				Wreck = False
+			};
+	
+			// Net_StuntStatus.LatestFigureTime = Now;
+	
+			 RunPoints = ML::Max(0, OgRunPoints + ((Net_PlayerTimeLimit-Now )/100));
+		}
+
+	} else OgRunPoints = RunPoints;
+
+	if (Player.CurrentRaceTime == -1400) {
+		log(Player.CurrentRaceTime);
+		Net_LatestStuntFigure = K_StuntFigure {
+			Name = -1,
+			Combo = 0,
+			Angle = 0,
+			Points = 0,
+			Factor = 1.,
+			StraightLanding = False,
+			ReverseLanding = False,
+			PerfectLanding = False,
+			MasterJump = False,
+			MasterLanding = False,
+			EpicLanding = False,
+			Wreck = False
+		};
+
+		Net_StuntStatus.LatestFigureTime = Now;
+		RunPoints = 0;
+	}
+
+	// log (RunPoints);
+	// UIManager.UIAll.StatusMessage = ""^(Net_PlayerTimeLimit-Now);
+
+	Net_StuntStatus = K_StuntStatus {
+		LatestFigureTime = Net_StuntStatus.LatestFigureTime, 
+		IsInFigure = Player.Stunt.IsInFigure,	 
+		IsNoAirControl = Player.Stunt.IsNoAirControl,	 
+		IsEpicAirControl = Player.Stunt.IsEpicAirControl,	 
+		IsMasterAirControl = Player.Stunt.IsMasterAirControl,	 
+		ChainCounter = Player.Stunt.ChainCounter,	 
+		ChainDelay = Player.Stunt.ChainDelay,	 
+		TimeLeftForStuntCombo = Player.Stunt.TimeLeftForStuntCombo,	 
+		TimeElapsedSinceLastStunt = Player.Stunt.TimeElapsedSinceLastStunt
+	};
+	// log(RunPoints);
+/* 	UIManager.UIAll.BigMessageSound = CUIConfig::EUISound::ScoreProgress;
+	if (Player.Stunt.LatestFigure.EpicLanding) UIManager.UIAll.BigMessageSoundVariant = 3;
+	else if (Player.Stunt.LatestFigure.MasterLanding) UIManager.UIAll.BigMessageSoundVariant = 2;
+	else if (Player.Stunt.LatestFigure.PerfectLanding) UIManager.UIAll.BigMessageSoundVariant = 1;
+	else UIManager.UIAll.BigMessageSoundVariant = 0;
+
+	if (Player.Stunt.LatestFigure.Name == CStuntFigure::EStuntName::BasicJump || Player.Stunt.LatestFigure.Wreck) {
+		if (Player.Stunt.TimeElapsedSinceLastStunt > 3000) {
+			UIManager.UIAll.BigMessage = "";
+			UIManager.UIAll.StatusMessage = "";
+		}
+	} else if (Player.Stunt.TimeLeftForStuntCombo == 0 && (Player.Stunt.LatestFigure.Name != CStuntFigure::EStuntName::BasicJump || !Player.Stunt.LatestFigure.Wreck)) {
+			UIManager.UIAll.BigMessage = "";
+			UIManager.UIAll.StatusMessage = "";
+	}
+ */
+	Net_RunPoints = RunPoints;
+
+}
+
+// Spawn players
+if (PlayersNbDead > 0) { //< Check for unspawned players only if at least one player is unspawned
+	foreach (Player in Players) {
+		if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned && Race::IsReadyToStart(Player)) {
+			declare Integer RunPoints for Player;
+			declare netwrite K_StuntFigure Net_LatestStuntFigure for Player;
+			declare netwrite K_StuntStatus Net_StuntStatus for Player;
+			declare netwrite Integer Net_PlayerTimeLimit for Player;
+	
+			
+			Net_LatestStuntFigure = K_StuntFigure {
+				Name = -1,
+				Combo = 0,
+				Angle = 0,
+				Points = 0,
+				Factor = 1.,
+				StraightLanding = False,
+				ReverseLanding = False,
+				PerfectLanding = False,
+				MasterJump = False,
+				MasterLanding = False,
+				EpicLanding = False,
+				Wreck = False
+			};
+	
+			Net_StuntStatus.LatestFigureTime = Now;
+			RunPoints = 0;
+			Race::Start(Player);
+		}
+	}
+}
+
+// Update the map duration setting
+if (Map_TimeLimit != S_TimeLimit) {
+	Map_TimeLimit = S_TimeLimit;
+	SetTimeLimit(StartTime, S_TimeLimit);
+}
+
+// End the map when time limit is reached
+if (EndTime > 0 && Now >= EndTime) {
+	MB_StopMatch();
+}
+***
+
+***Match_EndMap***
+***
+Layers::SetVisibility("StuntUI", False);
+// Ensure that we stop the match (after a vote for the next map, ...)
+MB_StopMatch();
+
+EndTime = -1;
+Match_MatchDuration = ML::Max(0, Now - Map_MapStartTime);
+StateMgr::ForcePlayersStates([StateMgr::C_State_Waiting]);
+Race::EnableIntroDuringMatch(False);
+
+Race::SortScores(GetScoresSortCriteria());
+TrophyRanking::UpdateUsersRank();
+CarRank::Update(CarRank::C_SortCriteria_TotalPoints);
+declare CSmScore Winner <=> Scores::GetBestPlayer(GetLadderSortCriteria());
+Scores::SetPlayerWinner(Winner);
+Race::StopSkipOutroAll();
+
+// Compute ranking for tracking
+declare Integer PreviousRaceTime = 0;
+declare Integer Rank = 0;
+foreach (Key => Score in Scores) {
+	declare Integer BestRaceTime = Scores::GetPlayerBestRaceTime(Score);
+	if (
+		Key == 0 || (
+			BestRaceTime > 0 &&
+			PreviousRaceTime < BestRaceTime
+		) || (
+			BestRaceTime <= 0 &&
+			PreviousRaceTime > 0
+		)
+	) {
+		PreviousRaceTime = BestRaceTime;
+		Rank = Key + 1;
+	}
+	Tracking::SendPlayerMatchResult(UIManager, Score.User, Rank, Winner == Score && Scores.count > 1 && BestRaceTime > 0);
+}
+***
+
+***Match_BeforePodiumSequence***
+***
+ModeUtils::PlaySound(CUIConfig::EUISound::EndRound, 0);
+
+declare CSmScore WinnerScore <=> Scores::GetPlayerWinner();
+if (WinnerScore != Null) {
+	if (!MB_MatchIsRunning()) {
+		UIModules_BigMessage::SetMessage(_("$<%1$> wins the match!"), WinnerScore.User.WebServicesUserId);
+	} else {
+		UIModules_BigMessage::SetMessage(_("$<%1$> wins the track!"), WinnerScore.User.WebServicesUserId);
+	}
+} else {
+	UIModules_BigMessage::SetMessage(_("|Match|Draw"));
+}
+
+***
+
+***Match_PodiumSequence***
+***
+declare CUIConfig::EUISequence PrevUISequence = UIManager.UIAll.UISequence;
+UIManager.UIAll.UISequence = CUIConfig::EUISequence::Podium;
+MB_Private_Sleep((S_ChatTime*1000)/2);
+
+
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
+MB_Private_Sleep((S_ChatTime*1000)/2);
+SetScoresTableScoreMode(Race::IsIndependentLaps(), True);
+
+UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::Normal;
+UIManager.UIAll.UISequence = PrevUISequence;
+***
+
+***Match_AfterPodiumSequence***
+***
+UIModules_BigMessage::SetMessage("");
+UIModules_ScoresTable::ResetTrophies();
+***
+
+
+***Match_BeforeUnloadMap***
+***
+Match_CanForceTrophyRankUpdate = False;
+***
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// MARK: Functions
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+/// Select the scores table score mode
+Void SetScoresTableScoreMode(Boolean _IsIndependentLaps, Boolean _DisplayTrophies) {
+	if (_DisplayTrophies) UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_Trophy);
+	else if (_IsIndependentLaps) UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_Points);
+	else UIModules_ScoresTable::SetScoreMode(UIModules_ScoresTable::C_Mode_Points);
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+/** Update the time limit
+ *
+ *	@param	_StartTime								The starting time of the map
+ *	@param	_NewTimeLimit							The time limit before going to the next map
+ */
+Void SetTimeLimit(Integer _StartTime, Integer _NewTimeLimit) {
+	if (_NewTimeLimit <= 0) {
+		EndTime = -1;
+		UIModules_ScoresTable::SetFooterInfo(TL::Compose("%1 -", _("Time Limit")));
+	} else {
+		EndTime = _StartTime + (_NewTimeLimit * 1000);
+		UIModules_ScoresTable::SetFooterInfo(TL::Compose("%1 "^TL::TimeToText(_NewTimeLimit*1000), _("Time Limit")));
+	}
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+/** Get the right sort criteria for
+ *	the scores
+ *
+ *	@return														The sort criteria
+ */
+Integer GetScoresSortCriteria() {
+	// if (Race::IsIndependentLaps()) return Race::C_Sort_BestLapTime;
+	return Race::C_Sort_TotalPoints;
+}
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
+/** Get the right sort criteria for
+ *	the ladder
+ *
+ *	@return														The sort criteria
+ */
+Integer GetLadderSortCriteria() {
+	return Scores::C_Sort_MapPoints;
+}
+
+Integer StuntNameToInt(CStuntFigure::EStuntName _StuntName) {
+	switch (_StuntName) {
+		case CStuntFigure::EStuntName::BasicJump: return 0;
+		case CStuntFigure::EStuntName::Flip: return 1;
+		case CStuntFigure::EStuntName::Backflip: return 2;
+		case CStuntFigure::EStuntName::Spin: return 3;
+		case CStuntFigure::EStuntName::Aerial: return 4;
+		case CStuntFigure::EStuntName::AlleyOop: return 5;
+		case CStuntFigure::EStuntName::Roll: return 6;
+		case CStuntFigure::EStuntName::Corkscrew: return 7;
+		case CStuntFigure::EStuntName::SpinOff: return 8;
+		case CStuntFigure::EStuntName::Rodeo: return 9;
+		case CStuntFigure::EStuntName::FlipFlap: return 10;
+		case CStuntFigure::EStuntName::Twister: return 11;
+		case CStuntFigure::EStuntName::FreeStyle: return 12;
+		case CStuntFigure::EStuntName::SpinningChaos: return 13;
+		case CStuntFigure::EStuntName::FlippingMix: return 14;
+		case CStuntFigure::EStuntName::RollingMadness: return 15;
+	}
+	return -1;
+}
+
+/* Text GetFullStuntName(CStuntFigure _Figure) {
+	if (_Figure.Name == CStuntFigure::EStuntName::None) return "";
+
+	declare Text[CStuntFigure::EStuntName] StuntNameMappings = [
+		CStuntFigure::EStuntName::BasicJump => "Basic Jump",
+		CStuntFigure::EStuntName::Flip => "Flip",
+		CStuntFigure::EStuntName::Backflip => "Backflip",
+		CStuntFigure::EStuntName::Spin => "Spin",
+		CStuntFigure::EStuntName::Aerial => "Aerial",
+		CStuntFigure::EStuntName::AlleyOop => "Alley Oop",
+		CStuntFigure::EStuntName::Roll => "Roll",
+		CStuntFigure::EStuntName::Corkscrew => "Corkscrew",
+		CStuntFigure::EStuntName::SpinOff => "Spin Off",
+		CStuntFigure::EStuntName::Rodeo => "Rodeo",
+		CStuntFigure::EStuntName::FlipFlap => "Flip Flap",
+		CStuntFigure::EStuntName::Twister => "Twister",
+		CStuntFigure::EStuntName::FreeStyle => "Free Style",
+		CStuntFigure::EStuntName::SpinningChaos => "Spinning Chaos",
+		CStuntFigure::EStuntName::FlippingMix => "Flipping Mix",
+		CStuntFigure::EStuntName::RollingMadness => "Rolling Madness"
+	];
+
+	declare Text Modifier = "";
+
+	declare Boolean IsChain = (_Figure.Name != CStuntFigure::EStuntName::BasicJump && !_Figure.Wreck);
+
+	if (_Figure.ReverseLanding) Modifier = Modifier ^ "Reverse ";
+	else if (_Figure.StraightLanding) Modifier = Modifier ^ "Straight ";
+
+	if (_Figure.Wreck) {
+		switch (_Figure.Name) {
+			case CStuntFigure::EStuntName::BasicJump: StuntNameMappings[_Figure.Name] = "Basic Wreck";
+			case CStuntFigure::EStuntName::Flip: StuntNameMappings[_Figure.Name] = "Flipping Wreck";
+			case CStuntFigure::EStuntName::Spin: StuntNameMappings[_Figure.Name] = "Spinning Wreck";
+			case CStuntFigure::EStuntName::Roll: StuntNameMappings[_Figure.Name] = "Rolling Wreck";
+			case CStuntFigure::EStuntName::Twister: StuntNameMappings[_Figure.Name] = "Twisting Wreck";
+			default: StuntNameMappings[_Figure.Name] = StuntNameMappings[_Figure.Name] ^ " Wreck";
+		}
+	}
+
+	if (_Figure.Combo <= 1 || !IsChain) {
+		if (_Figure.Angle != 0) {
+			return Modifier ^ StuntNameMappings[_Figure.Name] ^ " " ^ _Figure.Angle;
+		} else {
+			return Modifier ^ StuntNameMappings[_Figure.Name];
+		}
+	} else {
+		if (_Figure.Combo == 2) {
+			if (_Figure.Angle != 0) {
+				return "Chained "^ Modifier ^ StuntNameMappings[_Figure.Name] ^ " " ^ _Figure.Angle;
+			} else {
+				return "Chained "^ Modifier ^ StuntNameMappings[_Figure.Name];
+			}
+		} else {
+			if (_Figure.Angle != 0) {
+				return _Figure.Combo-1 ^ "X Chained "^ Modifier ^ StuntNameMappings[_Figure.Name] ^ " " ^ _Figure.Angle;
+			} else {
+				return _Figure.Combo-1 ^ "X Chained "^ Modifier ^ StuntNameMappings[_Figure.Name];
+			}
+		}
+
+	}
+	return "";
+} */
+
+/* Text GetStuntModifier(CStuntFigure _Figure) {
+	declare Text Modifier = "";
+	if (_Figure.EpicLanding) Modifier = "Epic";
+	else if (_Figure.MasterLanding) Modifier = "Master";
+	else if (_Figure.PerfectLanding) Modifier = "Perfect";
+	return Modifier;
+} */
+
+Text GetStuntUI() {
+	return """
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+	<manialink version="3">
+		<frame id="main" >
+			<label pos="0 -87.5" z-index="1" size="60 12" text="01:00.00" textemboss="1" textfont="oswaldmono" textcolor="FFF" textsize="10" halign="center" valign="bottom" id="timer"/>
+			<frame pos="0 70" id="stunt" rot="0" halign="center" valign="center" >
+				<label pos="0 1.5" z-index="1" size="107 6.78" text="Perfect" textemboss="0" textfont="gamefontextrabold" textsize="5" halign="center" valign="center2" id="stunt-modifier" textprefix="$t$s" textcolor='fff'/>
+				<label pos="0 -5" z-index="0" size="201 10.1" text="Straight Rolling Madness Wreck 1080" textemboss="0" textfont="gamefontextrabold" textsize="7" halign="center" valign="center2" id="stunt-name" textprefix="$T$s" textcolor='fff'/>
+				<label pos="0 -11" z-index="1" size="107 6.78" text="+32" textprefix="$t$s" textemboss="0" textfont="gamefontextrabold" textsize="5" halign="center" valign="center2" id="stunt-points" textcolor='fff'/>
+			</frame>
+			<frame pos="-205 45" size="109 11" halign="left" valign="center" id="combo" scale="0.75" hidden="0">
+				<quad pos="-4 -0.5" z-index="0" size="40 10" bgcolor="000" opacity="0.7" valign="center" halign="left"/>
+				<quad pos="36 -0.5" z-index="0" size="5 10" bgcolor="000" opacity="0.7" valign="center" halign="left" image="file://Media/Manialinks/Nadeo/CMGame/Utils/ButtonStyles/Straight	/Common_Button_End_Straight.dds" colorize="000"/>
+				<quad pos="0 -5.5" z-index="0" size="39 0.5" bgcolor="FFF" opacity="1" valign="bottom" halign="left" id="combo-timer"/>
+				<label pos="1 0" z-index="1" size="30 10" text="Combo" textprefix="$t$i" textfont="gamefontextrabold" textsize="5" valign="center" halign="left" textcolor='fff'/>
+				<label pos="39 -1" z-index="1" size="11 10" text="12" textprefix="$t$i" textfont="gamefontsemibold" textsize="5" valign="center2" halign="right" id="combo-value" textcolor='fff'/>
+			</frame>
+			<frame pos="-160 55" size="109 11" halign="left" valign="center" id="points" scale="1">
+				<quad pos="-2 -0.5" z-index="0" size="30 10" bgcolor="000" opacity="0.7" valign="center" halign="left"/>
+				<quad pos="28 -0.5" z-index="0" size="5 10" bgcolor="000" opacity="0.7" valign="center" halign="left" image="file://Media/Manialinks/Nadeo/CMGame/Utils/ButtonStyles/Straight	/Common_Button_End_Straight.dds" colorize="000"/>
+				<label pos="30.5 -1" z-index="1" size="20 10" text="9999" textprefix="$t$i" textfont="gamefontextrabold" textsize="5" valign="center2" halign="right" id="points-value" textcolor='fff'/>
+			</frame>
+			<frame id="points-dummy" pos="0 0" />
+		</frame>
+		<script><!--
+		#RequireContext CSmMlScriptIngame
+
+		#Include "TextLib" as TL
+		#Include "MathLib" as ML
+
+		#Struct K_StuntStatus {
+			Integer LatestFigureTime; 
+			Boolean IsInFigure;	 
+			Boolean IsNoAirControl;	 
+			Boolean IsEpicAirControl;	 
+			Boolean IsMasterAirControl;	 
+			Integer ChainCounter;	 
+			Integer ChainDelay;	 
+			Integer TimeLeftForStuntCombo;	 
+			Integer TimeElapsedSinceLastStunt;
+		}
+		
+		
+		#Struct K_StuntFigure {
+			Integer Name;
+			Integer Combo;
+			Integer Angle;
+			Integer Points;
+			Real Factor;
+			Boolean StraightLanding;
+			Boolean ReverseLanding;
+			Boolean PerfectLanding;
+			Boolean MasterJump;
+			Boolean MasterLanding;
+			Boolean EpicLanding;
+			Boolean Wreck;
+		}
+
+		Text GetFullStuntName(K_StuntFigure _Figure) {
+			if (_Figure.Name == -1) return "";
+		
+			declare Text[Integer] StuntNameMappings = [
+				-3 => "Time Penalty",
+				-2 => "Respawn Penalty",
+				-1 => "",
+				0 => "Basic Jump",
+				1 => "Flip",
+				2 => "Backflip",
+				3 => "Spin",
+				4 => "Aerial",
+				5 => "Alley Oop",
+				6 => "Roll",
+				7 => "Corkscrew",
+				8 => "Spin Off",
+				9 => "Rodeo",
+				10 => "Flip Flap",
+				11 => "Twister",
+				12 => "Free Style",
+				13 => "Spinning Chaos",
+				14 => "Flipping Mix",
+				15 => "Rolling Madness"
+			];
+		
+			declare Text Modifier = "";
+		
+			declare Boolean IsChain = (_Figure.Name != 0 && !_Figure.Wreck);
+		
+			if (_Figure.ReverseLanding) Modifier = Modifier ^ "Reverse ";
+			else if (_Figure.StraightLanding) Modifier = Modifier ^ "Straight ";
+		
+			if (_Figure.Wreck) {
+				switch (_Figure.Name) {
+					case 0: StuntNameMappings[_Figure.Name] = "Basic Wreck";
+					case 1: StuntNameMappings[_Figure.Name] = "Flipping Wreck";
+					case 3: StuntNameMappings[_Figure.Name] = "Spinning Wreck";
+					case 6: StuntNameMappings[_Figure.Name] = "Rolling Wreck";
+					case 11: StuntNameMappings[_Figure.Name] = "Twisting Wreck";
+					default: StuntNameMappings[_Figure.Name] = StuntNameMappings[_Figure.Name] ^ " Wreck";
+				}
+			}
+
+			if (_Figure.Name == 0) {
+				if (_Figure.StraightLanding || _Figure.ReverseLanding) {
+					StuntNameMappings[0] = TL::Replace(StuntNameMappings[0], "Basic ", "");
+				}
+			}
+
+			if (_Figure.Angle != 0) {
+				return Modifier ^ StuntNameMappings[_Figure.Name] ^ " " ^ _Figure.Angle ^ "°";
+			} else {
+				return Modifier ^ StuntNameMappings[_Figure.Name];
+			}
+			return "";
+		}
+		
+		Text GetStuntModifier(K_StuntFigure _Figure) {
+			declare Text Modifier = "";
+			if (_Figure.EpicLanding) Modifier = "Epic";
+			else if (_Figure.MasterLanding) Modifier = "Master";
+			else if (_Figure.PerfectLanding) Modifier = "Perfect";
+			else if (_Figure.Name == -3) Modifier = "Go to the finish!";
+			return Modifier;
+		}
+
+		main() {
+
+			declare metadata Integer Metadata_StuntTimeLimit for Map;
+			declare Integer StuntTimeLimit;
+
+			declare CMlFrame FrameMain = (Page.GetFirstChild("main") as CMlFrame);
+			declare CMlFrame FrameCombo = (Page.GetFirstChild("combo") as CMlFrame);
+			declare CMlFrame FrameStunt = (Page.GetFirstChild("stunt") as CMlFrame);
+			declare CMlQuad QuadComboTimer = (Page.GetFirstChild("combo-timer") as CMlQuad);
+			declare CMlLabel LabelPoints = (Page.GetFirstChild("points-value") as CMlLabel);
+			declare CMlLabel LabelCombo = (Page.GetFirstChild("combo-value") as CMlLabel);
+			declare CMlLabel LabelStuntModifier = (Page.GetFirstChild("stunt-modifier") as CMlLabel);
+			declare CMlLabel LabelStuntName = (Page.GetFirstChild("stunt-name") as CMlLabel);
+			declare CMlLabel LabelStuntPoints = (Page.GetFirstChild("stunt-points") as CMlLabel);
+			declare CMlLabel LabelTimer = (Page.GetFirstChild("timer") as CMlLabel);
+			declare CMlFrame PointsDummy = (Page.GetFirstChild("points-dummy") as CMlFrame);
+
+			declare Integer PrevStuntTime;
+			declare Integer StuntComboExpiry = 0;
+			declare Boolean CanCombo = False;
+			declare Boolean PrevCanCombo = False;
+			declare Boolean IsTimePenalty = False;
+			declare Boolean PrevIsTimePenalty = False;
+			declare Integer OgRunPoints;
+
+			declare CAudioSource[] StuntSounds = [
+				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Common/SelectQuitGame.wav"),
+				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Perfect_Landing.wav"),
+				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Master_Landing.wav"),
+				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Epic_Landing.wav")
+			];
+
+			
+
+			while (True) {
+				yield;
+				
+				if (Metadata_StuntTimeLimit <= 0) {
+					StuntTimeLimit = 60000;
+				} else {
+					StuntTimeLimit = Metadata_StuntTimeLimit*1000;
+				}
+
+
+				if (GUIPlayer != Null) {
+					declare netread Integer Net_RunPoints for GUIPlayer;
+					declare netread K_StuntFigure Net_LatestStuntFigure for GUIPlayer;
+					declare netread K_StuntStatus Net_StuntStatus for GUIPlayer;
+					declare netread Integer Net_PlayerTimeLimit for GUIPlayer;
+
+					FrameMain.Show();
+
+					declare Integer SoundVariant = 0;
+					if (Net_LatestStuntFigure.EpicLanding) SoundVariant = 3;
+					else if (Net_LatestStuntFigure.MasterLanding) SoundVariant = 2;
+					else if (Net_LatestStuntFigure.PerfectLanding) SoundVariant = 1;
+					else SoundVariant = 0;
+
+
+					if (IsTimePenalty != PrevIsTimePenalty) {
+						if (IsTimePenalty) {
+							if (ClientUI.UISequence != CUIConfig::EUISequence::Finish) {
+								AnimMgr.Flush(FrameStunt);
+								FrameStunt.RelativeScale = 0.;
+								// FrameStunt.RelativeRotation = ML::Rand(-2., 2.);
+								AnimMgr.Add(FrameStunt, "<frame scale='1' rot='0'/>", 250, CAnimManager::EAnimManagerEasing::ExpOut);
+		
+								foreach (Elem in FrameStunt.Controls) {
+									declare Label <=> (Elem as CMlLabel);
+									AnimMgr.Flush(Label);
+									Label.Opacity = 0.7;
+									AnimMgr.Add(Label, "<label opacity='1'/>", 250, CAnimManager::EAnimManagerEasing::ExpOut);
+									// AnimMgr.AddChain(Label, "<label />", 3000, CAnimManager::EAnimManagerEasing::Linear);
+									// AnimMgr.AddChain(Label, "<label opacity='0' />", 1000, CAnimManager::EAnimManagerEasing::Linear);
+								}
+							}
+
+						} else {
+							foreach (Elem in FrameStunt.Controls) {
+								declare Label <=> (Elem as CMlLabel);
+								Label.Opacity = 0.;
+								// AnimMgr.AddChain(Label, "<label />", 3000, CAnimManager::EAnimManagerEasing::Linear);
+								// AnimMgr.AddChain(Label, "<label opacity='0' />", 1000, CAnimManager::EAnimManagerEasing::Linear);
+							}
+						}
+						PrevIsTimePenalty = IsTimePenalty;
+					}
+					// log(IsTimePenalty);
+
+					// change timer colour
+					if (ClientUI.UISequence != CUIConfig::EUISequence::Finish) {
+						if (Net_PlayerTimeLimit-GameTime < 0) {
+							LabelTimer.TextColor = <1., 0., 0.>;
+						} else if (Net_PlayerTimeLimit-GameTime <= 5000) {
+							LabelTimer.TextColor = <1., 0.6, 0.>;
+						} else {
+							LabelTimer.TextColor = <1., 1., 1.>;
+						}
+					}
+
+
+					if (Net_PlayerTimeLimit-GameTime >= 0) {
+						if (Net_StuntStatus.LatestFigureTime != PrevStuntTime) {
+							if (Net_LatestStuntFigure.Name >= 0) {
+								StuntSounds[SoundVariant].Play();
+							}
+							
+							if (Net_LatestStuntFigure.Name >= 0) {
+								AnimMgr.Flush(LabelPoints);
+								AnimMgr.Add(LabelPoints, "<label scale='1' textcolor='FFF' />", 500, CAnimManager::EAnimManagerEasing::CircOut);
+								AnimMgr.AddChain(LabelPoints, "<label />", 2000-500, CAnimManager::EAnimManagerEasing::Linear);
+								AnimMgr.AddChain(LabelPoints,"<label scale='1' textcolor='fff' />", 500, CAnimManager::EAnimManagerEasing::CircOut);
+
+								AnimMgr.Add(PointsDummy, "<frame pos='"^Net_RunPoints^" 0' />", 2000, CAnimManager::EAnimManagerEasing::CircOut);
+							} else if (Net_LatestStuntFigure.Name == -2 ) {
+								AnimMgr.Add(PointsDummy, "<frame pos='"^Net_RunPoints^" 0' />", 250, CAnimManager::EAnimManagerEasing::Linear);
+							} else if (Net_LatestStuntFigure.Name == -1) {
+								log("helo");
+								AnimMgr.Flush(PointsDummy);
+								PointsDummy.RelativePosition_V3.X = Net_RunPoints*1.;
+							}
+
+	
+							if (!Net_LatestStuntFigure.Wreck && Net_LatestStuntFigure.Name != 0)  {
+								StuntComboExpiry = GameTime+Net_StuntStatus.ChainDelay;
+								AnimMgr.Flush(LabelCombo);
+								AnimMgr.Add(LabelCombo, "<label scale='1.25' />", 100, CAnimManager::EAnimManagerEasing::Linear);
+								AnimMgr.AddChain(LabelCombo,"<label scale='1' />", 100, CAnimManager::EAnimManagerEasing::Linear);
+							}
+							
+							if (Net_LatestStuntFigure.Combo >= 1) {
+								AnimMgr.Flush(FrameCombo);
+								AnimMgr.Add(FrameCombo, "<frame pos='-160 45' />", 500, CAnimManager::EAnimManagerEasing::ExpInOut);
+							} else if (Net_LatestStuntFigure.Combo == 0) {
+								AnimMgr.Flush(FrameCombo);
+								AnimMgr.Add(FrameCombo, "<frame pos='-205 45' />", 500, CAnimManager::EAnimManagerEasing::ExpInOut);
+								// AnimMgr.AddChain(FrameCombo, "<frame hidden='1' />", 1, CAnimManager::EAnimManagerEasing::Linear);
+							}
+	
+							AnimMgr.Flush(FrameStunt);
+							FrameStunt.RelativeScale = 0.;
+							FrameStunt.RelativeRotation = 0.;
+							AnimMgr.Add(FrameStunt, "<frame scale='1' rot='"^ML::Rand(-5., 5.)^"'/>", 250, CAnimManager::EAnimManagerEasing::ExpOut);
+							AnimMgr.AddChain(FrameStunt, "<frame />", 3000, CAnimManager::EAnimManagerEasing::Linear);
+							// AnimMgr.AddChain(FrameStunt, "<frame scale='0' />", 1000, CAnimManager::EAnimManagerEasing::ExpIn);
+	
+							foreach (Elem in FrameStunt.Controls) {
+								declare Label <=> (Elem as CMlLabel);
+								AnimMgr.Flush(Label);
+								Label.Opacity = 0.;
+								AnimMgr.Add(Label, "<label opacity='1'/>", 250, CAnimManager::EAnimManagerEasing::ExpOut);
+								AnimMgr.AddChain(Label, "<label />", 3000, CAnimManager::EAnimManagerEasing::Linear);
+								AnimMgr.AddChain(Label, "<label opacity='0' />", 1000, CAnimManager::EAnimManagerEasing::ExpIn);
+							}
+							
+							PrevStuntTime = Net_StuntStatus.LatestFigureTime;
+						}
+	
+
+					} else {
+						if (ClientUI.UISequence != CUIConfig::EUISequence::Finish)  {
+							LabelPoints.Value = "sdfsdf"^ML::Max(0, OgRunPoints+((Net_PlayerTimeLimit-GameTime)/100));
+							
+						}
+					}
+
+					
+					if (Net_StuntStatus.IsInFigure) {
+						CanCombo = Net_LatestStuntFigure.Combo >= 1;
+					} else {
+						CanCombo = ((StuntComboExpiry-GameTime) >= 0);
+					}
+					IsTimePenalty = Net_PlayerTimeLimit-GameTime < 0;
+
+					if (CanCombo != PrevCanCombo) {
+						if (!CanCombo) {
+							AnimMgr.Flush(FrameCombo);
+							AnimMgr.Add(FrameCombo, "<frame pos='-205 45' />", 500, CAnimManager::EAnimManagerEasing::ExpInOut);
+							// AnimMgr.AddChain(FrameCombo, "<frame hidden='1' />", 1, CAnimManager::EAnimManagerEasing::Linear);
+						}
+						PrevCanCombo = CanCombo;
+					}
+
+					if (StuntComboExpiry-GameTime > 0) QuadComboTimer.Size.X = ((StuntComboExpiry-GameTime) - 0.) / (Net_StuntStatus.ChainDelay - 0.1) * (39. - 0.) + 0.;
+					else QuadComboTimer.Size.X = 0.;
+						// log(StuntComboExpiry-GameTime);
+					LabelCombo.Value = ""^Net_LatestStuntFigure.Combo;
+					LabelStuntModifier.Value = GetStuntModifier(Net_LatestStuntFigure);
+					LabelStuntName.Value = GetFullStuntName(Net_LatestStuntFigure);
+					if (StuntTimeLimit > Net_PlayerTimeLimit-GameTime) {
+						if (ClientUI.UISequence != CUIConfig::EUISequence::Finish) LabelTimer.Value = TL::TimeToText(Net_PlayerTimeLimit-GameTime, True);
+					} else {
+						LabelTimer.Value = TL::TimeToText(StuntTimeLimit, True);
+					}
+
+					if (IsTimePenalty) {
+						if (ClientUI.UISequence != CUIConfig::EUISequence::Finish) LabelPoints.Value = ""^ML::Max(0, OgRunPoints+((Net_PlayerTimeLimit-GameTime)/100));
+						else LabelPoints.Value = ""^Net_RunPoints;
+					} else {
+
+						OgRunPoints = Net_RunPoints;
+						LabelPoints.Value = ""^ML::NearestInteger(PointsDummy.RelativePosition_V3.X);
+					}
+
+					// ClientUI.StatusMessage = ""^ (OgRunPoints+((Net_PlayerTimeLimit-GameTime)/100));
+					// ClientUI.BigMessage = ""^Net_RunPoints;
+					// log(ClientUI.UISequence);
+
+					if (Net_LatestStuntFigure.Name == -1) LabelStuntPoints.Value = "";
+
+					else if (Net_LatestStuntFigure.Points >= 0) {
+						LabelStuntPoints.Value = "+"^Net_LatestStuntFigure.Points;
+					} else if (Net_PlayerTimeLimit-GameTime < 0) {
+						if (ClientUI.UISequence != CUIConfig::EUISequence::Finish) LabelStuntPoints.Value = ""^ML::Max(OgRunPoints*-1, (Net_PlayerTimeLimit-GameTime)/100);
+				 	} else {
+						LabelStuntPoints.Value = ""^Net_LatestStuntFigure.Points;
+					}
+				} else {
+					FrameMain.Hide();
+				}
+			}
+		}
+		--></script>
+	</manialink>
+	""";
+}
+
+Void InitUI() {
+	Layers::Create("StuntUI", GetStuntUI());
+    Layers::SetType("StuntUI", CUILayer::EUILayerType::Normal);
+	Layers::Attach("StuntUI");
+    Layers::SetVisibility("StuntUI", True);
+}
