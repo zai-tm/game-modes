@@ -4,7 +4,7 @@
 #Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
 
 #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race,TrackMania\\TM_Stunt,TM_Stunt"
-#Const	Version							"2024-09-16"
+#Const	Version							"2024-10-01"
 #Const	ScriptName					"Modes/TrackMania/TM_ClassicStuntAttack_Online.Script.txt"
 
 // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -901,8 +901,8 @@ Text GetStuntUI() {
 		Text GetStuntModifier(K_StuntFigure _Figure) {
 			declare Text Modifier = "";
 			if (_Figure.EpicLanding) Modifier = "Epic";
-			else if (_Figure.MasterLanding) Modifier = "Master";
-			else if (_Figure.PerfectLanding) Modifier = "Perfect";
+			else if (_Figure.MasterLanding) Modifier = "Excellent";
+			else if (_Figure.PerfectLanding) Modifier = "Great";
 			else if (_Figure.Name == -3) Modifier = "Go to the finish!";
 			return Modifier;
 		}
@@ -934,8 +934,8 @@ Text GetStuntUI() {
 
 			declare CAudioSource[] StuntSounds = [
 				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Common/SelectQuitGame.wav"),
-				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Perfect_Landing.wav"),
-				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Master_Landing.wav"),
+				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Great_Landing.wav"),
+				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Excellent_Landing.wav"),
 				Audio.CreateSound("file://Media/Manialinks/Nadeo/CMGame/Utils/AudioManager/Game/Stunt_Epic_Landing.wav")
 			];
 
