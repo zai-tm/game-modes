@@ -5,7 +5,7 @@
  #Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
 
  #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race,TrackMania\\TM_Platform,TM_Platform"
- #Const	Version							"2025-01-05"
+ #Const	Version							"2025-01-05+2"
  #Const	ScriptName					"Modes/TrackMania/TM_TimeAttack_Online.Script.txt"
  
  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -755,7 +755,8 @@ foreach (Model in ModelNames) {
 	 MB_Private_Sleep(C_TrophyAnimationDuration);
 	 StateMgr::ForcePlayersStates([StateMgr::C_State_Waiting]);
  }
- 
+ // reset back to the overall winners
+ UIManager.UIAll.UISequence_PodiumPlayersWin = PodiumLogins[0]^","^PodiumLogins[1]^","^PodiumLogins[2];
  UIManager.UIAll.ScoreTableVisibility = CUIConfig::EVisibility::ForcedVisible;
  UIModules_BigMessage::SetMessage("");
  MB_Private_Sleep((S_ChatTime*1000)/2);
