@@ -1057,7 +1057,7 @@ Text GetScoreboardML() {
 			keepratio="Clip" image="file://Media/Flags/WOR.dds" />
 		<quad pos="-18 0" z-index="1" size="1.5 4" bgcolor="000" opacity="1" valign="center"
 			id="echelon" style="Hud3dEchelons" substyle="EchelonGold3" halign="right" scale="-1" hidden="1"/>
-		<label pos="-16 0" z-index="0" size="35 5" text="[ABCDE] VeryLongNameTest" keepratio="Clip"
+		<label pos="-16 0" z-index="0" size="35 5" text="Unnamed" keepratio="Clip"
 			textfont="gamefontsemibold" valign="center" textsize="1" id="player-name" />
 		<label pos="29 0" z-index="0" size="10.1 5" text="-:--.---" keepratio="Clip"
 			textfont="oswaldmono" valign="center" textsize="1" id="player-time" halign="right" />
