@@ -4,8 +4,8 @@
  */
  #Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
 
- #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race"
- #Const	Version							"2024-09-15"
+ #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race,TrackMania\\TM_Platform,TM_Platform"
+ #Const	Version							"2025-01-05"
  #Const	ScriptName					"Modes/TrackMania/TM_TimeAttack_Online.Script.txt"
  
  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -127,7 +127,7 @@
  Race::SortScores(GetScoresSortCriteria());
  UIModules_TimeGap::SetTimeGapMode(UIModules_TimeGap::C_TimeGapMode_BestRace);
  UIModules_PauseMenu_Online::SetHelp(Description);
- UIModules_Sign16x9Small::SetScoreMode(UIModules_Sign16x9Small::C_ScoreMode_BestRaceTime);
+ UIModules_Sign16x9Small::SetScoreMode(UIModules_Sign16x9Small::C_ScoreMode_Hidden);
  UIManager.UIAll.OverlayHideCountdown = True;
 //  UIManager.UIAll.OverlayHide321Go = False;
  UIManager.UIAll.OverlayHideSpectatorInfos = True;
@@ -405,7 +405,7 @@ foreach (Player in AllPlayers) {
 	
 	if (Now == SpawnDelay && Player.SpawnStatus == CSmPlayer::ESpawnStatus::NotSpawned) {
 		//log(SpawnDelay ^ " : " ^ Now);
-		Race::Start(Player, Now+1000);
+		Race::Start(Player, Now+1500);
 	}
 
 	declare netread Integer[Text][Text] Net_SortedTimes for UIManager.GetUI(Player);
@@ -459,33 +459,26 @@ foreach (Player in AllPlayers) {
 	declare netwrite Text[Text][][Text] Net_Leaderboards for UIManager.GetUI(Player);
 	Net_Leaderboards = Leaderboards;
 
-
-
 }
 
  foreach (Event in UIManager.PendingEvents) {
 	if (Event.Type == CUIConfigEvent::EType::OnLayerCustomEvent) {
 		if (Event.CustomEventType == "ButtonClick") {
             declare CSmPlayer Player = GetPlayer(Event.UI);
-			declare Integer SpawnDelay for Player; 
-			declare Boolean VehicleChange for Player;
-			declare Text CurrentModel for Player;
-			declare Text CarModel;
-			SpawnDelay = Now+1000;
-			VehicleChange = True;	
-			CarModel = Event.CustomEventData[0];
-			CurrentModel = CarModel;
-			// log(SpawnDelay ^ " : " ^ Now ^ " : " ^Event.CustomEventData[0]);
-			if (CarModel == MapPlayerModelName) Player.ForceModelId = NullId;
-            else Player.ForceModelId = ModelIds[CarModel];
-			Map.MapName = "$<"^Map.MapInfo.Name ^"$>."^ CarModel;
-			// UnspawnPlayer(Player);
-			Race::Wait(Player);
-
-			// SpawnPlayer(Player, 0, 1, MapLandmarks_PlayerSpawn[0].PlayerSpawn, Now+3000);
-            // Player.ForceModelId = ModelIds["CarSport"];
-
-			// SetPlayerAllWeaponAvailable(Players[0], True);
+			if (Player.SpawnStatus == CSmPlayer::ESpawnStatus::Spawned) {
+				declare Integer SpawnDelay for Player; 
+				declare Boolean VehicleChange for Player;
+				declare Text CurrentModel for Player;
+				declare Text CarModel;
+				SpawnDelay = Now+1500;
+				VehicleChange = True;	
+				CarModel = Event.CustomEventData[0];
+				CurrentModel = CarModel;
+				if (CarModel == MapPlayerModelName) Player.ForceModelId = NullId;
+				else Player.ForceModelId = ModelIds[CarModel];
+				Map.MapName = "$<"^Map.MapInfo.Name ^"$>."^ CarModel;
+				Race::Wait(Player);
+			}
 		}
 	}
 }
@@ -616,21 +609,15 @@ foreach (Player in AllPlayers) {
 
 		foreach (Login in LoginsList) {
 			if (!LoginsRanks[Model].existskey(Login)) {
-				log(Model);
 				LoginsRanks[Model][Login] = LoginsList.count;
 			}
 		}
 	}
-
 	
 	foreach (Login in LoginsList) {
 
-
-
 		declare Real Average;
-
-Average = 1.0*(LoginsRanks["CarSport"][Login] + LoginsRanks["CarSnow"][Login] + LoginsRanks["CarRally"][Login] + LoginsRanks["CarDesert"][Login])/4;
-		
+		Average = 1.0*(LoginsRanks["CarSport"][Login] + LoginsRanks["CarSnow"][Login] + LoginsRanks["CarRally"][Login] + LoginsRanks["CarDesert"][Login])/4;	
 		RankScores[Login] = Average;
 	}
 
@@ -710,7 +697,8 @@ if (Net_SortedTimes.count > 0) {
 		foreach(Login => Time in Net_SortedTimes[Model] ) {
 			Tops[Model][Count] = Login;
 			Count += 1;
-			if (Count == 2) {
+			log(Login);
+			if (Count == 3) {
 				Count = 0;
 				break;
 			}
@@ -843,7 +831,7 @@ foreach (Model in ModelNames) {
 	return """
 	<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
 <manialink version="3">
-<frame z-index="20" pos="100 89" id="main"> <!-- y 51 for open -->
+<frame z-index="20" pos="80 86.3" id="main" scale="1.25"> <!-- y 51 for open -->
 <quad pos="0 1" z-index="0" size="35 5" bgcolor="000" opacity="0.7" halign="center" valign="top" scriptevents="1" id="open-menu"/>
 <quad pos="14 -1.5" z-index="1" size="5 5" bgcolor="FFF" opacity="1" style="UICommon64_1" substyle="ArrowRightSlim_light" halign="center" valign="center" rot="		90" id="arrow"/>
 <quad pos="0 1" z-index="0" size="35 70" bgcolor="000" opacity="0.6" halign="center" valign="bottom"/>
@@ -882,9 +870,9 @@ main() {
 					AnimMgr.Flush(FrameMain);
 					if (MenuIsOpen) {
 						
-						AnimMgr.Add(FrameMain, "<frame pos='100 51' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
+						AnimMgr.Add(FrameMain, "<frame pos='80 41' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
 					} else {
-						AnimMgr.Add(FrameMain, "<frame pos='100 89' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
+						AnimMgr.Add(FrameMain, "<frame pos='80 86.3' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
 					}
 			} else if (Event.Type == CMlScriptEvent::Type::MouseClick && TL::StartsWith("car-", Event.ControlId)) {
 				if (ButtonDelta < Now) {
@@ -894,7 +882,7 @@ main() {
 					if (MenuIsOpen) {
 						QuadArrow.RelativeRotation = 90.;
 						AnimMgr.Flush(FrameMain);
-						AnimMgr.Add(FrameMain, "<frame pos='100 89' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
+						AnimMgr.Add(FrameMain, "<frame pos='80 86.3' />", Now, 500, CAnimManager::EAnimManagerEasing::SineOut);
 						MenuIsOpen = False;
 					}
 				}
