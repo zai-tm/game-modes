@@ -5,7 +5,7 @@
  #Extends "Modes/Nadeo/Trackmania/Base/TrackmaniaBase.Script.txt"
 
  #Const	CompatibleMapTypes	"TrackMania\\TM_Race,TM_Race,TrackMania\\TM_Platform,TM_Platform"
- #Const	Version							"2025-01-05+2"
+ #Const	Version							"2025-01-05+3"
  #Const	ScriptName					"Modes/TrackMania/TM_TimeAttack_Online.Script.txt"
  
  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
@@ -1054,11 +1054,11 @@ Text GetScoreboardML() {
 			valign="center" id="background" />
 		<label pos="-26.7 0" z-index="0" size="5 5" text="1" keepratio="Clip"
 			textfont="gamefontextrabold" halign="center" valign="center" textsize="1" id="rank" />
-		<quad pos="-24 0" z-index="0" size="6 4" bgcolor="000" opacity="1" valign="center" id="flag"
-			keepratio="Clip" image="file://Media/Flags/WOR.dds" />
+		<quad pos="-21 0" z-index="0" size="6 4" bgcolor="000" opacity="1" valign="center" id="flag"
+			keepratio="Fit" halign="center" image="file://Media/Manialinks/Nadeo/CMGame/Utils/Icons/128x128/ICON_PROFIL_DISCONNECT_01.dds" colorize="fff" />
 		<quad pos="-18 0" z-index="1" size="1.5 4" bgcolor="000" opacity="1" valign="center"
 			id="echelon" style="Hud3dEchelons" substyle="EchelonGold3" halign="right" scale="-1" hidden="1"/>
-		<label pos="-16 0" z-index="0" size="35 5" text="Unnamed" keepratio="Clip"
+		<label pos="-16 0" z-index="0" size="35 5" text="??? (Disconnected)" keepratio="Clip"
 			textfont="gamefontsemibold" valign="center" textsize="1" id="player-name" />
 		<label pos="29 0" z-index="0" size="10.1 5" text="-:--.---" keepratio="Clip"
 			textfont="oswaldmono" valign="center" textsize="1" id="player-time" halign="right" />
@@ -1105,6 +1105,8 @@ Text GetScoreboardML() {
 	main() {
 		declare netread Text[Text][][Text] Net_Leaderboards for UI;
 		declare netwrite Integer[Text][Text] Net_SortedTimes for UI;
+
+		declare Text[Text] SavedPlayerNames;
 
 		Net_SortedTimes = [ "CarSport" => Integer[Text], "CarSnow" => Integer[Text], "CarRally" => Integer[Text], "CarDesert" => Integer[Text] ];
 
@@ -1185,7 +1187,7 @@ Text GetScoreboardML() {
 						declare CMlLabel LineTime <=> (Line.GetFirstChild("player-time") as CMlLabel);
 	
 						declare Player <=> GetPlayer(Login);
-	
+						log(Player);
 						Line.Show();
 	
 						if (Player == GUIPlayer) LineBg.Opacity = 0.5;
@@ -1193,10 +1195,17 @@ Text GetScoreboardML() {
 	
 						LineRank.Value = ""^Count+1;
 						if (Player != Null) {
+							SavedPlayerNames[Player.User.Login] = GetPlayerNameWithClubTag(Player);
 							LineFlag.ImageUrl = Player.User.CountryFlagUrl;
 							LineName.Value = GetPlayerNameWithClubTag(Player);
 							LineName.Opacity = 1.;
+							LineFlag.Colorize = <-1.,-1.,-1.>;
 						} else {
+							if (SavedPlayerNames.existskey(Login)) {
+								LineName.Value = SavedPlayerNames[Login];
+							}
+							LineFlag.Colorize = <1.,1.,1.>;
+							LineFlag.ImageUrl = "file://Media/Manialinks/Nadeo/CMGame/Utils/Icons/128x128/ICON_PROFIL_DISCONNECT_01.dds";
 							LineName.Opacity = 0.5;
 						}
 	
