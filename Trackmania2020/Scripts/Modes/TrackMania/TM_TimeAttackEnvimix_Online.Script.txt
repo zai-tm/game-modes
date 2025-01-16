@@ -73,6 +73,13 @@
  }
  
  
+Text GetPlayerNameWithClubTag(CSmPlayer _Player) {
+	if (_Player.User.ClubTag != "") {
+		return TL::Compose("[$<%1$>] %2", _Player.User.ClubTag, _Player.User.Name);
+	}
+	return _Player.User.Name;
+}
+ 
  
  // ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~ //
  // MARK: Extends
@@ -133,6 +140,7 @@
  UIManager.UIAll.OverlayHideSpectatorInfos = True;
  ***
  
+ // MARK: Yield
  ***Match_Yield***
  ***
  foreach (Event in PendingEvents) {
@@ -144,7 +152,6 @@
 			 if (Event.Player != Null) {
 				 declare Boolean Match_CanForceTrophyRankUpdate for This;
 				 TrophyRanking::InitializeUser(Event.Player.User, Match_CanForceTrophyRankUpdate);
-
 				 
 			 }
 
@@ -213,7 +220,7 @@
 
  declare Integer[Text][Text] LoginsRanks = ["CarSport" => [], "CarSnow" => [], "CarRally" => [], "CarDesert" => [] ];
  declare Text[] PodiumLogins = ["", "", ""];
-
+ declare netwrite Text[Text] LoginsNames for Teams[0];
  ***
  
  ***Match_AfterLoadMap***
@@ -503,6 +510,7 @@ foreach (Player in AllPlayers) {
 			declare Integer SpawnDelay for Event.Player;
 			SpawnDelay = Now+1000;
 			Race::Wait(Event.Player);
+			LoginsNames[Event.Player.User.Login] = GetPlayerNameWithClubTag(Event.Player);
 
 		}
 
@@ -713,7 +721,7 @@ foreach (Model in ModelNames) {
 	MB_Sleep(1500);
 	UIManager.UIAll.UISequence_PodiumPlayersWin = Tops[Model][0]^","^Tops[Model][1]^","^Tops[Model][2];
 	
-	if (Tops[Model][0] != "") UIModules_BigMessage::SetMessage(TL::Compose("%1 wins %2!", GetPlayer(Tops[Model][0]).User.Name, Model));
+	if (Tops[Model][0] != "") UIModules_BigMessage::SetMessage(TL::Compose("%1 wins %2!", LoginsNames[Tops[Model][0]], Model));
 	else UIModules_BigMessage::SetMessage(TL::Compose("Nobody finished %1!", Model));
 }
 
@@ -1106,7 +1114,7 @@ Text GetScoreboardML() {
 		declare netread Text[Text][][Text] Net_Leaderboards for UI;
 		declare netwrite Integer[Text][Text] Net_SortedTimes for UI;
 
-		declare Text[Text] SavedPlayerNames;
+		declare netread Text[Text] LoginsNames for Teams[0];
 
 		Net_SortedTimes = [ "CarSport" => Integer[Text], "CarSnow" => Integer[Text], "CarRally" => Integer[Text], "CarDesert" => Integer[Text] ];
 
@@ -1195,14 +1203,13 @@ Text GetScoreboardML() {
 	
 						LineRank.Value = ""^Count+1;
 						if (Player != Null) {
-							SavedPlayerNames[Player.User.Login] = GetPlayerNameWithClubTag(Player);
 							LineFlag.ImageUrl = Player.User.CountryFlagUrl;
 							LineName.Value = GetPlayerNameWithClubTag(Player);
 							LineName.Opacity = 1.;
 							LineFlag.Colorize = <-1.,-1.,-1.>;
 						} else {
-							if (SavedPlayerNames.existskey(Login)) {
-								LineName.Value = SavedPlayerNames[Login];
+							if (LoginsNames.existskey(Login)) {
+								LineName.Value = LoginsNames[Login];
 							}
 							LineFlag.Colorize = <1.,1.,1.>;
 							LineFlag.ImageUrl = "file://Media/Manialinks/Nadeo/CMGame/Utils/Icons/128x128/ICON_PROFIL_DISCONNECT_01.dds";
