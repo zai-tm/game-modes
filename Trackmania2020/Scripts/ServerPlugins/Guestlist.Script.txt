@@ -1,0 +1,25 @@
+#RequireContext CServerPlugin
+
+#Include "TextLib" as TL
+
+#Setting S_PlayersLogins "" as "Player logins"
+#Setting S_SpectatorsLogins "" as "Spectator logins"
+
+main() {
+    declare Text[] PlayersList = TL::Split(",", S_PlayersLogins); 
+    declare Text[] SpectatorsList = TL::Split(",", S_SpectatorsLogins); 
+
+    while (True) {
+        yield;
+        foreach (Client in Clients) {
+            if (PlayersList.exists(Client.User.Login)) {
+                ServerAdmin.ForceSpectator(Client, CServerAdmin::ESpecMode::PlayerForced);
+            } else if (SpectatorsList.exists(Client.User.Login)) {
+                ServerAdmin.ForceSpectator(Client, CServerAdmin::ESpecMode::SpectatorForced);
+            } else {
+                ServerAdmin.Kick(Client, _("You are not allowed to play on this server."));
+            }
+        }
+    }
+    
+}

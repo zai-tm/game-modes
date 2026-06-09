@@ -1,0 +1,663 @@
+#RequireContext CServerPlugin
+
+#Const ScriptName "ServerPlugins/MapVote.Script.txt"
+#Const Version "1.0.0+2026-06-08"
+
+#Include "TextLib" as TL
+#Include "MathLib" as ML
+#Include "Libs/Nadeo/Layers2.Script.txt" as Layers
+
+#Setting S_Rows 1 as "Rows of maps (max 2)"
+#Setting S_VotingTime 10 as "Time to vote (seconds)"
+#Setting S_UseLeastPlayedMaps True as "Select from least played maps instead of random maps"
+
+#Const C_MapsPerRow 3
+
+#Struct K_MapInfo {
+    Text MapUid;
+    Text Name;
+    Text Author;
+    Text AuthorLogin;
+    Text ThumbnailUrl;
+}
+
+#Struct K_TMIOMap {
+    Text thumbnailUrl;
+}
+
+declare K_MapInfo[] G_MapVote_MapsToVote;
+declare Integer G_MapVote_EndTime;
+declare Text[Text] G_MapVote_PlayersVotes;
+declare Text G_MapVote_NextMapUid;
+declare Integer[Text] G_MapVote_VoteTimes;
+declare Boolean G_MapVote_VoteIsFinished;
+declare Boolean G_MapVote_CanVote;
+declare CMapInfo G_MapVote_PickedMap;
+declare CHttpRequest[Text] G_MapVote_MapInfoRequests;
+
+***DuringVotingScreen***
+***
+
+foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
+    if (Request.StatusCode == 0 || Request.StatusCode == 200) {
+        declare K_TMIOMap Result;
+        Result.fromjson(Request.Result);
+        Persistent_MapVote_MapThumbnailUrls[MapUid] = Result.thumbnailUrl;
+    } else {
+        log("Map not on NadeoServices or TM.IO request failed:");
+        log(Request);
+    }
+}
+
+foreach (I => VoteMap in G_MapVote_MapsToVote) {
+    if (Persistent_MapVote_MapThumbnailUrls.existskey(VoteMap.MapUid)) {
+        G_MapVote_MapsToVote[I] = K_MapInfo {
+            MapUid = VoteMap.MapUid, 
+            Name = VoteMap.Name, 
+            Author = VoteMap.Author, 
+            AuthorLogin = VoteMap.AuthorLogin, 
+            ThumbnailUrl = Persistent_MapVote_MapThumbnailUrls[VoteMap.MapUid]
+        };
+        Net_MapVote_MapsToVote = G_MapVote_MapsToVote;
+    }
+}
+
+// gather votes
+foreach (Player in Players) {
+    declare UI <=> UIManager.GetUI(Player);
+    if (UI == Null) continue;
+
+    declare netread Text Net_MapVote_MyVote for UI;
+    declare netread Integer Net_MapVote_MyVoteTime for UI;
+    declare netread Integer Net_MapVote_MyVoteEndTime for UI;
+    if (Net_MapVote_MyVote == "") continue;
+    if (Net_MapVote_MyVoteEndTime != G_MapVote_EndTime) continue;
+    G_MapVote_PlayersVotes[Player.User.Login] = Net_MapVote_MyVote;
+    G_MapVote_VoteTimes[Net_MapVote_MyVote] = Net_MapVote_MyVoteTime;
+}
+***
+
+Integer GetMapIndex(Text _MapUid) {
+    foreach (I => Map in MapList) {
+        if (Map.MapUid == _MapUid) {
+            return I;
+        }
+    }
+    return -1;
+}
+
+CMapInfo GetMapInfo(Text _MapUid) {
+    foreach (Map in MapList) {
+        if (Map.MapUid == _MapUid) {
+            return Map;
+        }
+    }
+    return Null;
+}
+
+Text GetManialink() {
+    declare Text MapCards;
+    declare Integer CardsOffset = 25+15*(ML::Clamp(S_Rows,1,2)-1);
+    for (I, 0, C_MapsPerRow*ML::Clamp(S_Rows,1,2)-1) {
+        declare Pos = < -55 + (I % C_MapsPerRow * 55.), I / C_MapsPerRow * -55. >;
+        MapCards ^= "<frameinstance modelid='mapcard' pos='"^Pos.X^" "^Pos.Y^"' hidden='1'/>";
+    }
+    declare Text ML = """
+<?xml version="1.0" encoding="utf-8" standalone="yes" ?>
+	<manialink version="3">
+		<framemodel id="mapcard" size="45 45">
+			<quad pos="0 0" z-index="50" size="45 45" bgcolor="0000" id="hitbox" scriptevents="1"/>
+			<quad pos="0 0" keepratio="Clip" z-index="1" size="45 45" bgcolor="000A" image="file://Thumbnails/MapUid/Z7vvi8GKZVtkVUcm1QkECnTYg_l" id="map-thumbnail"/>
+			<quad pos="0 0" z-index="2" size="45 33.75" bgcolor="FFFA" image="file://Media/Manialinks/Common/Links/image-grad.dds" rot="180" halign="right" valign="bottom" modulatecolor="000" opacity=".5"/>
+			<label textemboss="1" valign="center" pos="2 -3" z-index="3" size="41 4" text="$fff$sElite - $f20Co$f31lli$f42de$f53d" textcolor="fff" textsize="2" style="TextSubTitle2" textfont="GameFontExtraBold" id="map-name"/>
+			<label pos="2.1 -5.5" z-index="3" size="41 3" text="by Nadeo " textcolor="fff" textsize="1" textfont="GameFontSemiBold" id="map-author" textemboss="1"/>
+            <label hidden="1" id="map-uid" />
+			<label pos="23 -22" z-index="3" size="20 20" text="" textsize="10" textcolor="6EFAA0" halign="center" valign="center" textemboss="1" id="user-vote" hidden="1"/>
+			<frame z-index="10" hidden="1" id="hover">
+				<quad pos="0 0" z-index="3" size="0 45" bgcolor="FFF"/>
+				<quad pos="0 0" z-index="3" size="45 0" bgcolor="FFF"/>
+				<quad pos="45 0" z-index="3" size="0 45" bgcolor="FFF" halign="right" />
+				<quad pos="0 -45" z-index="3" size="45 0" bgcolor="FFF" valign="bottom"/>
+			</frame>
+			<frame z-index="4" pos="0 -6" id="vote-results">
+				<quad pos="0 -50" z-index="0" size="45 10" bgcolor="6EFAA0" valign="bottom" id="results-bg"/>
+				<label pos="1.25 -42.25" z-index="1" size="43 5" text="1 vote" textfont="GameFontSemiBold" textcolor="000" textsize="2" halign="left" valign="center" id="vote-count"/>
+				<label pos="1.25 -46.25" z-index="1" size="43 5" text="" textfont="GameFontRegular" textcolor="000" textsize="2" halign="left" valign="center" id="vote-reason"/>
+			</frame>
+		</framemodel>
+		<quad pos="0 0" z-index="50" size="320 180" bgcolor="FFFA" halign="center" valign="center" style="Bgs1" substyle="BgDialogBlur" bluramount="1"/>
+		<label pos="0 67" z-index="51" size="222 11" text="Vote for the next map" textcolor="fff" textsize="10" halign="center" textemboss="1" style="TextRaceMessageBig" textfont="GameFontBlack"/>
+		<label pos="0 56" z-index="51" size="57 5" text="3/5 votes" halign="center" textcolor="fff" style="TextRaceMessage" textfont="GameFontSemiBold" id="vote-count"/>
+		<label pos="0 50" z-index="51" size="21 5" text="0:10" halign="center" textcolor="fff" style="TextRaceMessage" textfont="OswaldMono" id="time-left" />
+		<!-- spacing = [55 55]-->
+		<frame pos="-22.5 {{{CardsOffset}}}" z-index="60" id="map-cards">
+			{{{MapCards}}}
+		</frame>
+        """;
+        
+    ML ^= """
+<script><!--
+#Include "TextLib" as TL
+#Include "MathLib" as ML
+#Include "ColorLib" as CL
+#Include "Libs/Nadeo/Trackmania/Stores/UserStore_ML.Script.txt" as UserStore
+#Include "Libs/Nadeo/CMGame/Utils/Tools.Script.txt" as Tools
+
+#Struct K_MapInfo {
+    Text MapUid;
+    Text Name;
+    Text Author;
+    Text AuthorLogin;
+    Text ThumbnailUrl;
+}
+
+***MainLoop***
+***
+Label_TimeLeft.Value = TL::TimeToText(ML::Max(Net_MapVote_EndTime-ArenaNow, 0), False, False);
+if (!Net_MapVote_VoteIsFinished) {
+    Label_VoteCount.Value = Net_MapVote_PlayersVotes.count^"/"^Players.count^" votes";
+}
+
+foreach (I => Control in Frame_MapCards.Controls) {
+    declare CMlFrame Frame_Card <=> (Control as CMlFrame);
+    declare CMlLabel Label_MapName <=> (Frame_Card.GetFirstChild("map-name") as CMlLabel);
+    declare CMlLabel Label_MapAuthor <=> (Frame_Card.GetFirstChild("map-author") as CMlLabel);
+    declare CMlLabel Label_UserVote <=> (Frame_Card.GetFirstChild("user-vote") as CMlLabel);
+    declare CMlQuad Quad_MapThumbnail <=> (Frame_Card.GetFirstChild("map-thumbnail") as CMlQuad);
+    declare Text Card_MapUid for Frame_Card;
+    
+    Tools::FitLabelValue(Label_MapName, 2., 1., 0.2);
+    Label_MapName.Value = Net_MapVote_MapsToVote[I].Name;
+    // Label_MapAuthor.Value = TL::Compose(_("By %1"), Net_MapVote_MapsToVote[I].Author);
+    Label_MapAuthor.Value = TL::Compose(_("By %1"), GetPlayerName(Net_MapVote_MapsToVote[I].AuthorLogin, "..."));
+    Quad_MapThumbnail.ImageUrl = Net_MapVote_MapsToVote[I].ThumbnailUrl;
+    Card_MapUid = Net_MapVote_MapsToVote[I].MapUid;
+    Label_UserVote.Visible = (Card_MapUid == Net_MapVote_MyVote);
+    Frame_Card.Show();
+}
+
+if (PrevPageIsVisible != PageIsVisible) {
+    PrevPageIsVisible = PageIsVisible;
+    if (PageIsVisible == True) {
+        declare Text[] LoginsToGet = [];
+        foreach (MapInfo in Net_MapVote_MapsToVote) {
+            LoginsToGet.add(MapInfo.AuthorLogin);
+        }
+        UserMgr.RetrieveDisplayName(UserMgr.MainUser.Id, LoginsToGet);
+        if (!Persistent_MapVote_RecentlyPlayedMaps.existskey(CurrentServerLogin)) {
+            Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin] = [];
+        }
+        if (Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin].exists(Map.MapInfo.MapUid)) {
+            Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin].remove(Map.MapInfo.MapUid);
+        }
+        Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin].add(Map.MapInfo.MapUid);
+        if (Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin].count > 15) {
+            Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin].removekey(0);
+        }
+    }
+    log("Your recently played maps:");
+    log(Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin]);
+    Net_MapVote_RecentlyPlayedMaps = Persistent_MapVote_RecentlyPlayedMaps[CurrentServerLogin];
+}
+
+if (PrevVoteIsFinished != Net_MapVote_VoteIsFinished) {
+    PrevVoteIsFinished = Net_MapVote_VoteIsFinished;
+    if (Net_MapVote_VoteIsFinished) {
+        RevealVotes();
+    }
+}
+
+foreach (Event in PendingEvents) {
+    if (Event.Type == CMlScriptEvent::Type::MouseOver) {
+        HoverMap(Event.Control.Parent, True);
+    } else if (Event.Type == CMlScriptEvent::Type::MouseOut) {
+        HoverMap(Event.Control.Parent, False);
+    }
+
+    if (Event.Type == CMlScriptEvent::Type::MouseClick) {
+        ClickMap(Event.Control.Parent);
+    }
+}
+***
+
+Text GetPlayerName(Text _Login, Text _Fallback) {
+    declare Text ReturnedName;
+    if (_Login == "Nadeo") return "Nadeo";
+    declare Boolean IsFirstPartyDisplayName = False;
+    declare Text DisplayName = UserStore::GetUserMgrPlayerName(_Login);
+    //log("DisplayName: <"^DisplayName^">");
+    if (DisplayName != "") return DisplayName;
+    return _Fallback;
+}
+
+Void HoverMap(CMlFrame _Frame, Boolean _Enabled) {
+    declare CMlFrame Frame_Hover <=> (_Frame.GetFirstChild("hover") as CMlFrame);
+    Frame_Hover.Visible = _Enabled;
+    if (_Enabled) {
+        foreach (I => Control in Frame_Hover.Controls) {
+            declare CMlQuad Quad <=> (Control as CMlQuad);
+            AnimMgr.Flush(Control);
+            if (I % 2 == 0) {
+                Quad.Size = <0., 45.>;
+                AnimMgr.Add(Quad, "<control size='0.5 45' />", 250, CAnimManager::EAnimManagerEasing::ExpOut);
+            }
+            else {
+                Quad.Size = <45., 0.>;
+                AnimMgr.Add(Quad, "<control size='45 0.5' />", 250, CAnimManager::EAnimManagerEasing::ExpOut);
+            }
+        }
+    } else {
+        foreach (I => Control in Frame_Hover.Controls) {
+            declare CMlQuad Quad <=> (Control as CMlQuad);
+            
+            if (I % 2 == 0) Quad.Size = <0., 45.>;
+            else Quad.Size = <45., 0.>;
+        }
+    }
+}
+
+Void ClickMap(CMlFrame _Frame) {
+    declare Text Card_MapUid for _Frame;
+    declare netread Integer Net_MapVote_EndTime for Teams[0];
+    declare netwrite Text Net_MapVote_MyVote for UI;
+    declare netwrite Integer Net_MapVote_MyVoteTime for UI;
+    declare netwrite Integer Net_MapVote_MyVoteEndTime for UI;
+
+    declare CMlLabel Label_UserVote <=> (_Frame.GetFirstChild("user-vote") as CMlLabel);
+
+    Label_UserVote.Opacity = 0.;
+    Label_UserVote.RelativeScale = 1.25;
+    AnimMgr.Flush(Label_UserVote);
+    AnimMgr.Add(Label_UserVote, "<control opacity='1' scale='1' />", 200, CAnimManager::EAnimManagerEasing::ExpOut);
+    Net_MapVote_MyVote = Card_MapUid;
+    Net_MapVote_MyVoteTime = ArenaNow;
+    Net_MapVote_MyVoteEndTime = Net_MapVote_EndTime;
+}
+
+Void RevealVotes() {
+    declare netread Integer[Text] Net_MapVote_VoteCounts for Teams[0];
+    declare netread Text Net_MapVote_PickedMapUid for Teams[0];
+    declare netread Integer Net_MapVote_SelectReason for Teams[0];
+    declare CMlFrame Frame_MapCards <=> (Page.GetFirstChild("map-cards") as CMlFrame);
+    foreach (I => Control in Frame_MapCards.Controls) {
+        declare CMlFrame Frame_Card <=> (Control as CMlFrame);
+        declare CMlFrame Frame_VoteResults <=> (Frame_Card.GetFirstChild("vote-results") as CMlFrame);
+        declare CMlQuad Quad_Hitbox <=> (Frame_Card.GetFirstChild("hitbox") as CMlQuad);
+        declare CMlQuad Quad_ResultsBg <=> (Frame_Card.GetFirstChild("results-bg") as CMlQuad);
+        declare CMlLabel Label_VoteCount <=> (Frame_Card.GetFirstChild("vote-count") as CMlLabel);
+        declare CMlLabel Label_VoteReason <=> (Frame_Card.GetFirstChild("vote-reason") as CMlLabel);
+        declare Text Card_MapUid for Frame_Card;
+        
+        Quad_Hitbox.Hide();
+        if (!Net_MapVote_VoteCounts.existskey(Card_MapUid)) {
+            Quad_ResultsBg.BgColor = CL::Hex6ToRgb("B3B3B3");
+            Label_VoteCount.Value = "0 votes";
+        } else {
+            declare Integer VoteCount = Net_MapVote_VoteCounts[Card_MapUid];
+            if (VoteCount == 1) {
+                Label_VoteCount.Value = "1 vote";
+            } else {
+                Label_VoteCount.Value = VoteCount^" votes";
+            }
+
+            if (Card_MapUid != Net_MapVote_PickedMapUid) {
+                Quad_ResultsBg.BgColor = CL::Hex6ToRgb("F25C84");
+            }
+        }
+        
+        switch (Net_MapVote_SelectReason) {
+            case 0: {
+                Label_VoteReason.Value = "Selected randomly";
+            }
+            case 1: {
+                Label_VoteReason.Value = "Selected by majority";
+            }
+            case 2: {
+                Label_VoteReason.Value = "Selected by everyone";
+            }
+            case 3: {
+                Label_VoteReason.Value = "Selected first";
+            }
+        }
+
+        //anim
+        Frame_VoteResults.RelativePosition_V3 = <0., -10.1>;
+        if (Card_MapUid == Net_MapVote_PickedMapUid) {
+            AnimMgr.Add(Frame_VoteResults, "<control pos='0 4' />", 100, CAnimManager::EAnimManagerEasing::Linear);
+            Quad_ResultsBg.BgColor = CL::Hex6ToRgb("6EFAA0");
+        } else {
+            AnimMgr.Add(Frame_VoteResults, "<control pos='0 0' />", 100, CAnimManager::EAnimManagerEasing::Linear);
+        }
+    }
+}
+
+Real FitTextScale(CMlLabel _Label, Text _Value, Real _Size) {
+    declare CMlLabel TestLabel = _Label;
+    TestLabel.TextSizeReal = _Size;
+    if (TestLabel.ComputeWidth(_Value) <= _Label.Size.X) return _Size;
+    return _Size*(_Label.Size.X/TestLabel.ComputeWidth(_Value));
+}
+
+main() {
+   	EnableMenuNavigationInputs = True;
+    EnableMenuNavigation(True, True, Null, 0);
+    declare netread K_MapInfo[] Net_MapVote_MapsToVote for Teams[0];
+    declare netread Integer Net_MapVote_EndTime for Teams[0];
+    declare netread Boolean Net_MapVote_VoteIsFinished for Teams[0];
+    declare netread Text[Text] Net_MapVote_PlayersVotes for Teams[0];
+
+    declare netwrite Text Net_MapVote_MyVote for UI;
+
+    declare persistent Text[][Text] Persistent_MapVote_RecentlyPlayedMaps for LocalUser;
+    declare netwrite Text[] Net_MapVote_RecentlyPlayedMaps for UI;
+
+    Net_MapVote_MyVote = "";
+
+    declare CMlFrame Frame_MapCards <=> (Page.GetFirstChild("map-cards") as CMlFrame);
+    declare CMlLabel Label_TimeLeft <=> (Page.GetFirstChild("time-left") as CMlLabel);
+    declare CMlLabel Label_VoteCount <=> (Page.GetFirstChild("vote-count") as CMlLabel);
+
+    declare PrevVoteIsFinished = False;
+    declare PrevPageIsVisible = False;
+
+    while (True) {
+        yield;
+        ---MainLoop---
+    }
+}
+    --></script> 
+	</manialink>
+""";
+    return ML;
+}
+
+// Get the map score
+Integer[Text] GetMapsScore(Text[] _MapsToScore) {
+    declare Integer[Text] MapScores;
+    declare Integer Points = 0;
+    foreach (MapUid in _MapsToScore) {
+        // if it's the current map skip it
+        if (MapUid == MapInfo.MapUid) continue;
+        MapScores[MapUid] = Points;
+        Points += 1;
+    }
+    return MapScores;
+}
+
+Integer[Text] GetMapsServerScore() {
+    declare persistent Text[] Persistent_MapVote_ServerRecentlyPlayedMaps;
+    return GetMapsScore(Persistent_MapVote_ServerRecentlyPlayedMaps);
+}
+
+Integer[Text] GetMapsPlayerScore(CClient _Player) {
+    declare UI <=> UIManager.GetUI(_Player);
+
+    // UI doesn't exist? (Fake player, etc...)
+    if (UI == Null) return [];
+
+    declare netread Text[] Net_MapVote_RecentlyPlayedMaps for UI;
+    return GetMapsScore(Net_MapVote_RecentlyPlayedMaps);
+}
+
+Integer[Text] GetMapsPlayerScore(CPlayer _Player) {
+    declare UI <=> UIManager.GetUI(_Player);
+
+    // UI doesn't exist? (Fake player, etc...)
+    if (UI == Null) return [];
+
+    declare netread Text[] Net_MapVote_RecentlyPlayedMaps for UI;
+    return GetMapsScore(Net_MapVote_RecentlyPlayedMaps);
+}
+
+Void IncrementCurrentMapPlayCount() {
+    declare persistent Integer[Text] Per_MapVote_MapsPlayCount;
+    if (!Per_MapVote_MapsPlayCount.existskey(MapInfo.MapUid)) Per_MapVote_MapsPlayCount[MapInfo.MapUid] = 0;
+    Per_MapVote_MapsPlayCount[MapInfo.MapUid] += 1;
+}
+
+Integer GetMapPlayCount(CMapInfo _Map) {
+    if (_Map == Null) return 0;
+    declare persistent Integer[Text] Per_MapVote_MapsPlayCount;
+    if (!Per_MapVote_MapsPlayCount.existskey(_Map.MapUid)) return 0;
+    return Per_MapVote_MapsPlayCount[_Map.MapUid];
+}
+
+Void GetMapsToVote(Boolean _UseLeastPlayedMaps) {
+    declare persistent Integer[Text] Persistent_MapVote_MapsPlayCount;
+    declare CMapInfo[] Maps;
+    foreach (_MapInfo in MapList) {
+        if (_MapInfo.MapUid != MapInfo.MapUid) Maps.add(_MapInfo);
+    }
+    if (_UseLeastPlayedMaps) {
+        // Get the map scores
+        // Higher score = more recent & more players have played that map recently
+        // Get the maps with the lowest scores
+        declare Integer[Text] MapScores = GetMapsServerScore();
+        foreach (Player in Players) {
+            foreach (MapUid => Points in GetMapsPlayerScore(Player)) {
+                if (!MapScores.existskey(MapUid)) MapScores[MapUid] = Points;
+                else MapScores[MapUid] += Points;
+            }
+        }
+
+        // maps that aren't in the MapScores list yet haven't been played by any player or the server recently
+        // assign them a score of 0
+        foreach (Map in MapList) {
+            if (!MapScores.existskey(Map.MapUid) && Map.MapUid != MapInfo.MapUid) MapScores[Map.MapUid] = 0;
+        }
+
+        // remove maps that don't exist on the server (map list changed...)
+        foreach (MapUid => MapScore in MapScores) {
+            if (GetMapIndex(MapUid) == -1) {
+                MapScores.removekey(MapUid);
+            }
+        }
+
+        // sort maps by score [0=>[a,b,c],1=>[d,e,f],2=>[g,h,i]]
+
+        declare Text[][Integer] GroupedMaps;
+        declare Integer CurrentGroup = 0;
+
+        foreach (MapUid => Score in MapScores) {
+            if (!GroupedMaps.existskey(Score)) GroupedMaps[Score] = [];
+            GroupedMaps[Score].add(MapUid);
+        }
+
+        GroupedMaps = GroupedMaps.sortkey();
+        log("Grouped map scores:");
+        log(GroupedMaps);
+        while (G_MapVote_MapsToVote.count < (ML::Clamp(S_Rows,1,2)*C_MapsPerRow)) {
+            if (!GroupedMaps.existskey(CurrentGroup)) {
+                CurrentGroup += 1;
+                continue;
+            }
+
+            if (GroupedMaps[CurrentGroup].count == 0) {
+                GroupedMaps.removekey(CurrentGroup);
+            } else {
+                declare MapIndex = ML::Rand(0,GroupedMaps[CurrentGroup].count-1);
+                declare CMapInfo VoteMapInfo <=> GetMapInfo(GroupedMaps[CurrentGroup][MapIndex]);
+                G_MapVote_MapsToVote.add(K_MapInfo {
+                    MapUid = VoteMapInfo.MapUid,
+                    Name = VoteMapInfo.Name,
+                    Author = VoteMapInfo.AuthorNickName,
+                    AuthorLogin = VoteMapInfo.AuthorLogin,
+                    ThumbnailUrl = "file://Thumbnails/MapUid/"^VoteMapInfo.MapUid
+                });
+                GroupedMaps[CurrentGroup].removekey(MapIndex);
+            }
+            yield;
+        }
+
+        
+    } else {
+        for (I, 1, (ML::Clamp(S_Rows,1,2)*C_MapsPerRow)) {
+            declare CMapInfo VoteMapInfo <=> Maps[ML::Rand(0,Maps.count-1)];
+            G_MapVote_MapsToVote.add( K_MapInfo {
+                MapUid = VoteMapInfo.MapUid,
+                Name = VoteMapInfo.Name,
+                Author = VoteMapInfo.AuthorNickName,
+                AuthorLogin = VoteMapInfo.AuthorLogin,
+                ThumbnailUrl = "file://Thumbnails/MapUid/"^VoteMapInfo.MapUid
+            });
+            Maps.remove(VoteMapInfo);
+        }
+    }
+    declare Text Headers = """Accept: application/json
+Content-Type: application/json
+User-Agent: ServerPlugin;MapVote/{{{Version}}}""";
+    declare Text MapUidsToRequest;
+    declare persistent Text[Text] Persistent_MapVote_MapThumbnailUrls;
+    foreach (Map in G_MapVote_MapsToVote) {
+        MapUidsToRequest ^= Map.MapUid^",";
+        if (Persistent_MapVote_MapThumbnailUrls.existskey(Map.MapUid) && Persistent_MapVote_MapThumbnailUrls[Map.MapUid] == "") Persistent_MapVote_MapThumbnailUrls.removekey(Map.MapUid);
+        if(!Persistent_MapVote_MapThumbnailUrls.existskey(Map.MapUid)) {
+            G_MapVote_MapInfoRequests[Map.MapUid] = (Http.CreateGet("https://trackmania.io/api/map/"^Map.MapUid, True));
+        }
+    }
+}
+
+Void StartVote() {
+    declare netwrite K_MapInfo[] Net_MapVote_MapsToVote for Teams[0];
+    declare netwrite Integer Net_MapVote_EndTime for Teams[0];
+
+    G_MapVote_CanVote = True;
+
+    declare persistent Text[] Persistent_MapVote_ServerRecentlyPlayedMaps;
+    if (Persistent_MapVote_ServerRecentlyPlayedMaps.exists(MapInfo.MapUid)) {
+        Persistent_MapVote_ServerRecentlyPlayedMaps.remove(MapInfo.MapUid);
+    }
+    Persistent_MapVote_ServerRecentlyPlayedMaps.add(MapInfo.MapUid);
+    if (Persistent_MapVote_ServerRecentlyPlayedMaps.count > 15) {
+        Persistent_MapVote_ServerRecentlyPlayedMaps.removekey(0);
+    }
+    
+ 
+    //not enough maps
+    if (MapList.count < (ML::Clamp(S_Rows,1,2)*C_MapsPerRow)+1) G_MapVote_CanVote = False;
+
+    // jukeboxed map
+    if (MapList.existskey(NextMapIndex) && MapList[NextMapIndex].MapUid != G_MapVote_NextMapUid) G_MapVote_CanVote = False;
+
+    if (!G_MapVote_CanVote) return;
+
+
+    G_MapVote_EndTime = Now+(S_VotingTime*1000)+1000;
+    G_MapVote_MapsToVote = [];
+
+    HoldMapUnloadRequest = True;
+    GetMapsToVote(S_UseLeastPlayedMaps);
+    UIManager.UIAll.ForceSpectator = True;
+
+    Net_MapVote_MapsToVote = G_MapVote_MapsToVote;
+    Net_MapVote_EndTime = G_MapVote_EndTime;
+}
+
+Void EndVote() {
+    declare netwrite Integer[Text] Net_MapVote_VoteCounts for Teams[0];
+    declare netwrite Text Net_MapVote_PickedMapUid for Teams[0];
+    declare netwrite Integer Net_MapVote_SelectReason for Teams[0]; // 0 = random, 1 = majority vote, 2 = everyone, 3 = first
+    declare Integer[Text] MapUidsCount;
+
+    declare Integer NbVotes = G_MapVote_PlayersVotes.count;
+    foreach (Vote in G_MapVote_PlayersVotes) {
+        if (!MapUidsCount.existskey(Vote)) MapUidsCount[Vote] = 0;
+        MapUidsCount[Vote] = MapUidsCount[Vote] + 1;
+    }
+    MapUidsCount = MapUidsCount.sortreverse();
+    Net_MapVote_VoteCounts = MapUidsCount;
+    declare Text[] SortedMaps;
+    foreach (MapUid => VoteCount in MapUidsCount) {
+        SortedMaps.add(MapUid);
+    }
+    Net_MapVote_SelectReason = 0;
+    G_MapVote_PickedMap <=> GetMapInfo(G_MapVote_MapsToVote[ML::Rand(0,G_MapVote_MapsToVote.count-1)].MapUid);
+    if (NbVotes >= 1) {
+        Net_MapVote_SelectReason = 1;
+        // if vote counts are a tie pick the map that was voted for first
+        if (SortedMaps.count > 1 && MapUidsCount[SortedMaps[0]] == MapUidsCount[SortedMaps[1]]) {
+            Net_MapVote_SelectReason = 3;
+            declare Text[] TiedMapUids;
+            declare Integer VoteCount = MapUidsCount[SortedMaps[0]];
+            foreach (MapUid => Count in MapUidsCount) {
+                if (Count == VoteCount) TiedMapUids.add(MapUid);
+            }
+
+            declare Integer[Text] MaxVoteTimes;
+            foreach (Login => Vote in G_MapVote_PlayersVotes) {
+                if (TiedMapUids.exists(Vote)) {
+                    if (!MaxVoteTimes.existskey(Vote)) MaxVoteTimes[Vote] = G_MapVote_VoteTimes[Login];
+                    else {
+                        if (G_MapVote_VoteTimes[Login] > MaxVoteTimes[Vote]) MaxVoteTimes[Vote] = G_MapVote_VoteTimes[Login];
+                    }
+                }
+            }
+            // find map with the earliest last vote
+            MaxVoteTimes = MaxVoteTimes.sort();
+            declare Text MinVoteTimeMap;
+            foreach (MapUid => Time in MaxVoteTimes) {
+                MinVoteTimeMap = MapUid;
+                break;
+            }
+            G_MapVote_PickedMap <=> GetMapInfo(MinVoteTimeMap);
+        } else {
+            if (NbVotes == MapUidsCount[SortedMaps[0]]) {
+                Net_MapVote_SelectReason = 2;
+            }
+            G_MapVote_PickedMap <=> GetMapInfo(SortedMaps[0]);
+        }
+    }
+    Net_MapVote_PickedMapUid = G_MapVote_PickedMap.MapUid;
+    NextMapIndex = MapList.keyof(G_MapVote_PickedMap);
+    G_MapVote_VoteIsFinished = True;
+}
+
+main() {
+    declare netwrite Text[Text] Net_MapVote_PlayersVotes for Teams[0];
+    declare netwrite Boolean Net_MapVote_VoteIsFinished for Teams[0];
+    declare netwrite K_MapInfo[] Net_MapVote_MapsToVote for Teams[0];
+    
+    declare persistent Text[Text] Persistent_MapVote_MapThumbnailUrls;
+
+    ServerAdmin.Authentication_GetToken(NullId, "NadeoLiveServices");
+    Layers::Load();
+    Layers::Create("MapVote", GetManialink());
+    G_MapVote_NextMapUid = MapList[NextMapIndex].MapUid;
+
+    while (True) {
+        yield;
+        Net_MapVote_VoteIsFinished = G_MapVote_VoteIsFinished;
+        Net_MapVote_PlayersVotes = G_MapVote_PlayersVotes;
+        foreach(Event in PendingEvents) {
+            if (Event == Null) continue;
+            if (Event.Type == CServerPluginEvent::EType::MapUnloadRequested) {
+                StartVote();
+            } else if (Event.Type == CServerPluginEvent::EType::ModeCallback) {
+                if (Event.ModeCallbackType == "Maniaplanet.StartMap_Start") {
+                    if (MapList.existskey(NextMapIndex)) {
+                        G_MapVote_NextMapUid = MapList[NextMapIndex].MapUid;
+                    }
+                }
+            }
+        }
+
+        if (MapUnloadRequested && G_MapVote_CanVote) {
+            
+            Layers::Attach("MapVote");
+            ---DuringVotingScreen---
+            if (Now >= G_MapVote_EndTime && !G_MapVote_VoteIsFinished) {
+                EndVote();
+            }
+            if (Now >= G_MapVote_EndTime+5000) {
+                HoldMapUnloadRequest = False;
+                G_MapVote_PlayersVotes = [];
+                G_MapVote_VoteTimes = [];
+                G_MapVote_MapInfoRequests = [];
+                UIManager.UIAll.ForceSpectator = False;
+            }
+        } else {
+            Layers::Detach("MapVote"); 
+            G_MapVote_VoteIsFinished = False;
+        }
+    }
+}
