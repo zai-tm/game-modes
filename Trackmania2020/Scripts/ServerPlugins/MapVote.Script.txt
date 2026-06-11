@@ -1,7 +1,7 @@
 #RequireContext CServerPlugin
 
 #Const ScriptName "ServerPlugins/MapVote.Script.txt"
-#Const Version "1.0.0+2026-06-08"
+#Const Version "1.0.1+2026-06-10"
 
 #Include "TextLib" as TL
 #Include "MathLib" as ML
@@ -39,13 +39,16 @@ declare CHttpRequest[Text] G_MapVote_MapInfoRequests;
 ***
 
 foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
-    if (Request.StatusCode == 0 || Request.StatusCode == 200) {
-        declare K_TMIOMap Result;
-        Result.fromjson(Request.Result);
-        Persistent_MapVote_MapThumbnailUrls[MapUid] = Result.thumbnailUrl;
-    } else {
-        log("Map not on NadeoServices or TM.IO request failed:");
-        log(Request);
+    if (Request.IsCompleted) {
+        if (Request.StatusCode == 0 || Request.StatusCode == 200) {
+            declare K_TMIOMap Result;
+            Result.fromjson(Request.Result);
+            Persistent_MapVote_MapThumbnailUrls[MapUid] = Result.thumbnailUrl;
+        } else {
+            log("Map not on NadeoServices or TM.IO request failed:");
+            log(Request);
+        }
+        Http.Destroy(Request);        
     }
 }
 
