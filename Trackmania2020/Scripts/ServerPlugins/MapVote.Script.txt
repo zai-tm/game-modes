@@ -48,7 +48,6 @@ foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
             log("Map not on NadeoServices or TM.IO request failed:");
             log(Request);
         }
-        Http.Destroy(Request);        
     }
 }
 
@@ -172,7 +171,7 @@ foreach (I => Control in Frame_MapCards.Controls) {
     Tools::FitLabelValue(Label_MapName, 2., 1., 0.2);
     Label_MapName.Value = Net_MapVote_MapsToVote[I].Name;
     // Label_MapAuthor.Value = TL::Compose(_("By %1"), Net_MapVote_MapsToVote[I].Author);
-    Label_MapAuthor.Value = TL::Compose(_("By %1"), GetPlayerName(Net_MapVote_MapsToVote[I].AuthorLogin, "..."));
+    Label_MapAuthor.Value = TL::Compose(_("By %1"), GetPlayerName(Net_MapVote_MapsToVote[I].AuthorLogin, Net_MapVote_MapsToVote[I].AuthorLogin));
     Quad_MapThumbnail.ImageUrl = Net_MapVote_MapsToVote[I].ThumbnailUrl;
     Card_MapUid = Net_MapVote_MapsToVote[I].MapUid;
     Label_UserVote.Visible = (Card_MapUid == Net_MapVote_MyVote);
@@ -661,6 +660,11 @@ main() {
         } else {
             Layers::Detach("MapVote"); 
             G_MapVote_VoteIsFinished = False;
+            foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
+                if (Request.IsCompleted) {
+                    Http.Destroy(Request);
+                }
+            }
         }
     }
 }
