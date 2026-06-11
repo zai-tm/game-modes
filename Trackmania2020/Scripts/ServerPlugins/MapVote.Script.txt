@@ -1,7 +1,7 @@
 #RequireContext CServerPlugin
 
 #Const ScriptName "ServerPlugins/MapVote.Script.txt"
-#Const Version "1.0.1+2026-06-10"
+#Const Version "1.0.2+2026-06-11"
 
 #Include "TextLib" as TL
 #Include "MathLib" as ML
@@ -40,6 +40,7 @@ declare CHttpRequest[Text] G_MapVote_MapInfoRequests;
 
 foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
     if (Request.IsCompleted) {
+        G_MapVote_MapInfoRequests.remove(Request);
         if (Request.StatusCode == 0 || Request.StatusCode == 200) {
             declare K_TMIOMap Result;
             Result.fromjson(Request.Result);
@@ -48,7 +49,8 @@ foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
             log("Map not on NadeoServices or TM.IO request failed:");
             log(Request);
         }
-    }
+        Http.Destroy(Request);
+    } 
 }
 
 foreach (I => VoteMap in G_MapVote_MapsToVote) {
@@ -660,11 +662,6 @@ main() {
         } else {
             Layers::Detach("MapVote"); 
             G_MapVote_VoteIsFinished = False;
-            foreach (MapUid => Request in G_MapVote_MapInfoRequests) {
-                if (Request.IsCompleted) {
-                    Http.Destroy(Request);
-                }
-            }
         }
     }
 }
