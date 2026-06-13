@@ -1,7 +1,7 @@
 #RequireContext CServerPlugin
 
 #Const ScriptName "ServerPlugins/MapVote.Script.txt"
-#Const Version "1.0.2+2026-06-11"
+#Const Version "1.0.3+2026-06-13
 
 #Include "TextLib" as TL
 #Include "MathLib" as ML
@@ -77,7 +77,7 @@ foreach (Player in Players) {
     if (Net_MapVote_MyVote == "") continue;
     if (Net_MapVote_MyVoteEndTime != G_MapVote_EndTime) continue;
     G_MapVote_PlayersVotes[Player.User.Login] = Net_MapVote_MyVote;
-    G_MapVote_VoteTimes[Net_MapVote_MyVote] = Net_MapVote_MyVoteTime;
+    G_MapVote_VoteTimes[Player.User.Login] = Net_MapVote_MyVoteTime;
 }
 ***
 
