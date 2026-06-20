@@ -1,7 +1,7 @@
 #RequireContext CServerPlugin
 
 #Const ScriptName "ServerPlugins/MapVote.Script.txt"
-#Const Version "1.0.3+2026-06-13
+#Const Version "1.0.3+2026-06-19"
 
 #Include "TextLib" as TL
 #Include "MathLib" as ML
